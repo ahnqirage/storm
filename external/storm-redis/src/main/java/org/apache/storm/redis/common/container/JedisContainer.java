@@ -15,11 +15,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.storm.redis.common.container;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisCommands;
 import redis.clients.jedis.JedisPool;
 
@@ -29,7 +29,7 @@ import java.io.IOException;
 /**
  * Container for managing Jedis instances.
  */
-public class JedisContainer implements JedisCommandsInstanceContainer, Closeable {
+public class JedisContainer implements JedisCommandsInstanceContainer {
     private static final Logger LOG = LoggerFactory.getLogger(JedisContainer.class);
 
     private JedisPool jedisPool;

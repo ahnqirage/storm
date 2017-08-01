@@ -19,13 +19,8 @@
 package org.apache.storm.hack;
 
 import org.apache.storm.daemon.JarTransformer;
-import org.apache.storm.hack.relocation.Relocator;
-import org.apache.storm.hack.relocation.SimpleRelocator;
-import org.apache.storm.hack.resource.ClojureTransformer;
-import org.apache.storm.hack.resource.ResourceTransformer;
 
 import java.io.*;
-import java.util.Arrays;
 
 public class StormShadeTransformer implements JarTransformer {
     @Override

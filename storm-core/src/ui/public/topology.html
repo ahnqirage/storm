@@ -34,9 +34,6 @@
 <script src="/js/jquery.blockUI.min.js" type="text/javascript"></script>
 <script src="/js/jsonFormatter.min.js" type="text/javascript"></script>
 <script src="/js/script.js?_ts=${packageTimestamp}" type="text/javascript"></script>
-<script src="/js/visualization.js" type="text/javascript"></script>
-<script src="/js/arbor.js" type="text/javascript"></script>
-<script src="/js/arbor-graphics.js" type="text/javascript"></script>
 <script src="/js/dataTables.bootstrap.min.js" type="text/javascript"></script>
 </head>
 <body>
@@ -79,6 +76,9 @@
     <div id="bolt-stats" class="col-md-12"></div>
   </div>
   <div class="row">
+    <div id="worker-stats" class="col-md-12"></div>
+  </div>
+  <div class="row">
     <div id="topology-visualization" class="col-md-12"></div>
   </div>
   <div class="row">
@@ -91,6 +91,9 @@
   </div>
   <div class="row">
     <div id="json-response-error" class="col-md-12"></div>
+  </div>
+  <div>
+    <p id="page-rendered-at-timestamp"></p>
   </div>
 </div>
 </body>
@@ -230,7 +233,7 @@ function renderLogLevelForm (template, responseData){
     };
     if (!responseData) {
         var topologyId = $.url("?id");
-        getStatic ('/api/v1/topology/' + topologyId + '/logconfig', renderImpl);
+        $.get('/api/v1/topology/' + topologyId + '/logconfig', renderImpl);
     } else {
         renderImpl (responseData);
     }
@@ -283,13 +286,14 @@ $(document).ready(function() {
         var topologySpoutsLag = $("#topology-spouts-lag");
         var spoutStats = $("#spout-stats");
         var boltStats = $("#bolt-stats");
+        var workerStats = $("#worker-stats");
         var config = $("#topology-configuration");
         var topologyActions = $("#topology-actions");
         var topologyVisualization = $("#topology-visualization")
         var searchForm = $("#search-form")
         var formattedConfig = formatConfigData(response["configuration"]);
         var buttonJsonData = topologyActionJson(response["id"],response["encodedId"],response["name"],response["status"]
-                                                ,response["msgTimeout"],response["debug"],response["samplingPct"]);
+                                                ,response["msgTimeout"],response["configuration"]["topology.eventlogger.executors"],response["debug"],response["samplingPct"]);
         $.ajax ({url: "/templates/topology-page-template.html", success: function(template) {
             toggleChangeLogLevel = function (data) {
               renderLogLevelForm (template, data);
@@ -316,23 +320,28 @@ $(document).ready(function() {
             });
 
             spoutStats.append(Mustache.render($(template).filter("#spout-stats-template").html(),response));
-            //id, executors, tasks, emitted, transferred, complete latency, acked, failed, Last error
             dtAutoPage("#spout-stats-table", {
               columnDefs: [
-                {type: "num", targets: [1, 2, 3, 4, 5, 6, 7]}
+                {type: "num", targets: 'table-num'}
               ]
             });
 
             boltStats.append(Mustache.render($(template).filter("#bolt-stats-template").html(),response));
-            //id, executors, tasks, emitted, transferred, capacity, execute latency, executed, process latency, acked, failed, last error
             dtAutoPage("#bolt-stats-table", {
               columnDefs: [
-                {type: "num", targets: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]}
+                {type: "num", targets: 'table-num'}
               ]
             });
 
+          jsError(function() {
+            workerStats.append(Mustache.render($(template).filter("#worker-stats-template").html(),response));
+            makeTopologyWorkerStatsTable (response, '#worker-stats-table', '#worker-stats');
+          });
+
+          jsError(function() {
             topologyVisualization.append(Mustache.render($(template).filter("#topology-visualization-template").html(), response));
             $("#show-hide-visualization").click(function () { show_visualization(null) });
+            $("#open-visualization").click(function() { open_visualization(); });
 
             config.append(Mustache.render($(template).filter("#topology-configuration-template").html(),formattedConfig));
             $('#topology-configuration td').jsonFormatter()
@@ -347,6 +356,7 @@ $(document).ready(function() {
                 errorCells[i].style.color = "#9d261d";
                 errorCells[i].style.borderBottomColor = "#9d261d";
               }
+              errorCells[i].style.whiteSpace = "pre";
             }
             
             var errorTime = document.getElementsByClassName("errorTime");
@@ -438,10 +448,13 @@ $(document).ready(function() {
                     }
                 }
             });
+          });
       }});
     });
-
  });
+
+getPageRenderedTimestamp("page-rendered-at-timestamp");
+
 </script>
 </html>
 

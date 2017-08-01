@@ -15,14 +15,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.storm.redis.common.container;
 
 import redis.clients.jedis.JedisCommands;
 
+import java.io.Closeable;
+
 /**
  * Interfaces for containers which stores instances implementing JedisCommands.
  */
-public interface JedisCommandsInstanceContainer {
+public interface JedisCommandsInstanceContainer extends Closeable {
     /**
      * Borrows instance from container.
      * @return instance which implements JedisCommands
@@ -34,4 +37,10 @@ public interface JedisCommandsInstanceContainer {
      * @param jedisCommands borrowed instance
      */
     void returnInstance(JedisCommands jedisCommands);
+
+    /**
+     * Release Container
+     */
+    @Override
+    public void close();
 }

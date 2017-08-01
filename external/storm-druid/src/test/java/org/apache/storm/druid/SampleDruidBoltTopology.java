@@ -20,6 +20,7 @@ package org.apache.storm.druid;
 
 import org.apache.storm.Config;
 import org.apache.storm.LocalCluster;
+import org.apache.storm.LocalCluster.LocalTopology;
 import org.apache.storm.StormSubmitter;
 import org.apache.storm.druid.bolt.DruidBeamBolt;
 import org.apache.storm.druid.bolt.DruidBeamFactory;
@@ -52,11 +53,11 @@ public class SampleDruidBoltTopology {
 
         topologyBuilder.setSpout("event-gen", new SimpleSpout(), 5);
         DruidBeamFactory druidBeamFactory = new SampleDruidBeamFactoryImpl(new HashMap<String, Object>());
-        DruidConfig druidConfig = DruidConfig.newBuilder().discardStreamId(DruidConfig.DEFAULT_DISCARD_STREAM_ID).build();
+        DruidConfig.Builder builder = DruidConfig.newBuilder().discardStreamId(DruidConfig.DEFAULT_DISCARD_STREAM_ID);
         ITupleDruidEventMapper<Map<String, Object>> eventMapper = new TupleDruidEventMapper<>(TupleDruidEventMapper.DEFAULT_FIELD_NAME);
-        DruidBeamBolt<Map<String, Object>> druidBolt = new DruidBeamBolt<Map<String, Object>>(druidBeamFactory, eventMapper, druidConfig);
+        DruidBeamBolt<Map<String, Object>> druidBolt = new DruidBeamBolt<Map<String, Object>>(druidBeamFactory, eventMapper, builder);
         topologyBuilder.setBolt("druid-bolt", druidBolt).shuffleGrouping("event-gen");
-        topologyBuilder.setBolt("printer-bolt", new PrinterBolt()).shuffleGrouping("druid-bolt" , druidConfig.getDiscardStreamId());
+        topologyBuilder.setBolt("printer-bolt", new PrinterBolt()).shuffleGrouping("druid-bolt" , DruidConfig.DEFAULT_DISCARD_STREAM_ID);
 
         Config conf = new Config();
         conf.setDebug(true);
@@ -69,12 +70,10 @@ public class SampleDruidBoltTopology {
         } else {
             conf.setMaxTaskParallelism(3);
 
-            LocalCluster cluster = new LocalCluster();
-            cluster.submitTopology("druid-test", conf, topologyBuilder.createTopology());
-
-            Thread.sleep(30000);
-
-            cluster.shutdown();
+            try (LocalCluster cluster = new LocalCluster();
+                 LocalTopology topo = cluster.submitTopology("druid-test", conf, topologyBuilder.createTopology());) {
+                Thread.sleep(30000);
+            }
             System.exit(0);
         }
     }

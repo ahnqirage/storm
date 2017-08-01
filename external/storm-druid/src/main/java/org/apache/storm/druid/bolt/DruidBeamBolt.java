@@ -26,9 +26,11 @@ import org.apache.storm.task.OutputCollector;
 import org.apache.storm.task.TopologyContext;
 import org.apache.storm.topology.OutputFieldsDeclarer;
 import org.apache.storm.topology.base.BaseRichBolt;
+import org.apache.storm.topology.base.BaseTickTupleAwareRichBolt;
 import org.apache.storm.tuple.Fields;
 import org.apache.storm.tuple.Tuple;
 import org.apache.storm.tuple.Values;
+import org.apache.storm.utils.TupleUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -47,7 +49,8 @@ import java.util.Map;
  * <p/>
  *
  */
-public class DruidBeamBolt<E> extends BaseRichBolt {
+public class DruidBeamBolt<E> extends BaseTickTupleAwareRichBolt {
+    private static final Logger LOG = LoggerFactory.getLogger(DruidBeamBolt.class);
 
     private volatile  OutputCollector collector;
     private DruidBeamFactory<E> beamFactory = null;
@@ -55,45 +58,49 @@ public class DruidBeamBolt<E> extends BaseRichBolt {
     private Tranquilizer<E> tranquilizer = null;
     private ITupleDruidEventMapper<E> druidEventMapper = null;
 
-    public DruidBeamBolt(DruidBeamFactory<E> beamFactory, ITupleDruidEventMapper<E> druidEventMapper, DruidConfig druidConfig) {
+    public DruidBeamBolt(DruidBeamFactory<E> beamFactory, ITupleDruidEventMapper<E> druidEventMapper, DruidConfig.Builder druidConfigBuilder) {
         this.beamFactory = beamFactory;
-        this.druidConfig = druidConfig;
+        this.druidConfig = druidConfigBuilder.build();
         this.druidEventMapper = druidEventMapper;
     }
 
     @Override
-    public void prepare(Map stormConf, TopologyContext context, OutputCollector collector) {
+    public void prepare(Map<String, Object> topoConf, TopologyContext context, OutputCollector collector) {
         this.collector = collector;
         tranquilizer = Tranquilizer.builder()
                 .maxBatchSize(druidConfig.getMaxBatchSize())
                 .maxPendingBatches(druidConfig.getMaxPendingBatches())
                 .lingerMillis(druidConfig.getLingerMillis())
                 .blockOnFull(druidConfig.isBlockOnFull())
-                .build(beamFactory.makeBeam(stormConf, context));
+                .build(beamFactory.makeBeam(topoConf, context));
         this.tranquilizer.start();
     }
 
     @Override
-    public void execute(final Tuple tuple) {
-      Future future = tranquilizer.send((druidEventMapper.getEvent(tuple)));
-      future.addEventListener(new FutureEventListener() {
-          @Override
-          public void onFailure(Throwable cause) {
-              if (cause instanceof MessageDroppedException) {
-                  collector.ack(tuple);
-                  if (druidConfig.getDiscardStreamId() != null)
-                      collector.emit(druidConfig.getDiscardStreamId(), new Values(tuple, System.currentTimeMillis()));
-              }
-              else {
-                  collector.fail(tuple);
-              }
-          }
+    protected void process(final Tuple tuple) {
+        Future future = tranquilizer.send((druidEventMapper.getEvent(tuple)));
+        LOG.debug("Sent tuple : [{}]", tuple);
 
-          @Override
-          public void onSuccess(Object value) {
-                  collector.ack(tuple);
-          }
-      });
+        future.addEventListener(new FutureEventListener() {
+            @Override
+            public void onFailure(Throwable cause) {
+                if (cause instanceof MessageDroppedException) {
+                    collector.ack(tuple);
+                    LOG.debug("Tuple Dropped due to MessageDroppedException : [{}]", tuple);
+                    if (druidConfig.getDiscardStreamId() != null)
+                        collector.emit(druidConfig.getDiscardStreamId(), new Values(tuple, System.currentTimeMillis()));
+                } else {
+                    collector.fail(tuple);
+                    LOG.debug("Tuple Processing Failed : [{}]", tuple);
+                }
+            }
+
+            @Override
+            public void onSuccess(Object value) {
+                collector.ack(tuple);
+                LOG.debug("Tuple Processing Success : [{}]", tuple);
+            }
+        });
 
     }
 

@@ -15,12 +15,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.storm.redis.common.container;
 
 import redis.clients.jedis.JedisCluster;
 import redis.clients.jedis.JedisCommands;
 
-import java.io.Closeable;
 import java.io.IOException;
 
 /**
@@ -28,7 +28,7 @@ import java.io.IOException;
  * <p/>
  * Note that JedisCluster doesn't need to be pooled since it's thread-safe and it stores pools internally.
  */
-public class JedisClusterContainer implements JedisCommandsInstanceContainer, Closeable {
+public class JedisClusterContainer implements JedisCommandsInstanceContainer {
 
     private JedisCluster jedisCluster;
 

@@ -17,6 +17,7 @@
  */
 package org.apache.storm.redis.state;
 
+import org.apache.storm.redis.common.config.JedisClusterConfig;
 import org.apache.storm.state.DefaultStateSerializer;
 import org.apache.storm.state.Serializer;
 import org.apache.storm.state.State;
@@ -29,6 +30,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.storm.redis.common.config.JedisPoolConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import redis.clients.jedis.JedisCluster;
 
 import java.util.Collections;
 import java.util.HashMap;
@@ -41,22 +43,22 @@ public class RedisKeyValueStateProvider implements StateProvider {
     private static final Logger LOG = LoggerFactory.getLogger(RedisKeyValueStateProvider.class);
 
     @Override
-    public State newState(String namespace, Map stormConf, TopologyContext context) {
+    public State newState(String namespace, Map<String, Object> topoConf, TopologyContext context) {
         try {
-            return getRedisKeyValueState(namespace, getStateConfig(stormConf));
+            return getRedisKeyValueState(namespace, getStateConfig(topoConf));
         } catch (Exception ex) {
-            LOG.error("Error loading config from storm conf {}", stormConf);
+            LOG.error("Error loading config from storm conf {}", topoConf);
             throw new RuntimeException(ex);
         }
     }
 
-    StateConfig getStateConfig(Map stormConf) throws Exception {
+    StateConfig getStateConfig(Map<String, Object> topoConf) throws Exception {
         StateConfig stateConfig = null;
         String providerConfig = null;
         ObjectMapper mapper = new ObjectMapper();
         mapper.setVisibility(PropertyAccessor.FIELD, JsonAutoDetect.Visibility.ANY);
-        if (stormConf.containsKey(org.apache.storm.Config.TOPOLOGY_STATE_PROVIDER_CONFIG)) {
-            providerConfig = (String) stormConf.get(org.apache.storm.Config.TOPOLOGY_STATE_PROVIDER_CONFIG);
+        if (topoConf.containsKey(org.apache.storm.Config.TOPOLOGY_STATE_PROVIDER_CONFIG)) {
+            providerConfig = (String) topoConf.get(org.apache.storm.Config.TOPOLOGY_STATE_PROVIDER_CONFIG);
             stateConfig = mapper.readValue(providerConfig, StateConfig.class);
         } else {
             stateConfig = new StateConfig();
@@ -65,7 +67,18 @@ public class RedisKeyValueStateProvider implements StateProvider {
     }
 
     private RedisKeyValueState getRedisKeyValueState(String namespace, StateConfig config) throws Exception {
-        return new RedisKeyValueState(namespace, getJedisPoolConfig(config), getKeySerializer(config), getValueSerializer(config));
+        JedisPoolConfig jedisPoolConfig = getJedisPoolConfig(config);
+        JedisClusterConfig jedisClusterConfig = getJedisClusterConfig(config);
+
+        if (jedisPoolConfig == null && jedisClusterConfig == null) {
+            jedisPoolConfig = buildDefaultJedisPoolConfig();
+        }
+
+        if (jedisPoolConfig != null) {
+            return new RedisKeyValueState(namespace, jedisPoolConfig, getKeySerializer(config), getValueSerializer(config));
+        } else {
+            return new RedisKeyValueState(namespace, jedisClusterConfig, getKeySerializer(config), getValueSerializer(config));
+        }
     }
 
     private Serializer getKeySerializer(StateConfig config) throws Exception {
@@ -95,15 +108,24 @@ public class RedisKeyValueStateProvider implements StateProvider {
     }
 
     private JedisPoolConfig getJedisPoolConfig(StateConfig config) {
-        return config.jedisPoolConfig != null ? config.jedisPoolConfig : new JedisPoolConfig.Builder().build();
+        return config.jedisPoolConfig;
     }
 
-    static class StateConfig {
-        String keyClass;
-        String valueClass;
-        String keySerializerClass;
-        String valueSerializerClass;
-        JedisPoolConfig jedisPoolConfig;
+    private JedisClusterConfig getJedisClusterConfig(StateConfig config) {
+        return config.jedisClusterConfig;
+    }
+
+    private JedisPoolConfig buildDefaultJedisPoolConfig() {
+        return new JedisPoolConfig.Builder().build();
+    }
+
+    public static class StateConfig {
+        public String keyClass;
+        public String valueClass;
+        public String keySerializerClass;
+        public String valueSerializerClass;
+        public JedisPoolConfig jedisPoolConfig;
+        public JedisClusterConfig jedisClusterConfig;
 
         @Override
         public String toString() {
@@ -113,6 +135,7 @@ public class RedisKeyValueStateProvider implements StateProvider {
                     ", keySerializerClass='" + keySerializerClass + '\'' +
                     ", valueSerializerClass='" + valueSerializerClass + '\'' +
                     ", jedisPoolConfig=" + jedisPoolConfig +
+                    ", jedisClusterConfig=" + jedisClusterConfig +
                     '}';
         }
     }

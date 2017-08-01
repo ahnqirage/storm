@@ -34,7 +34,7 @@ import org.apache.storm.hdfs.common.AbstractHDFSWriter;
 import org.apache.storm.hdfs.common.NullPartitioner;
 import org.apache.storm.hdfs.common.Partitioner;
 import org.apache.storm.hdfs.common.rotation.RotationAction;
-import org.apache.storm.hdfs.common.security.HdfsSecurityUtil;
+import org.apache.storm.hdfs.security.HdfsSecurityUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -99,7 +99,7 @@ public abstract class AbstractHdfsBolt extends BaseRichBolt {
      * @param topologyContext
      * @param collector
      */
-    public final void prepare(Map conf, TopologyContext topologyContext, OutputCollector collector){
+    public final void prepare(Map<String, Object> conf, TopologyContext topologyContext, OutputCollector collector){
         this.writeLock = new Object();
         if (this.syncPolicy == null) throw new IllegalStateException("SyncPolicy must be specified.");
         if (this.rotationPolicy == null) throw new IllegalStateException("RotationPolicy must be specified.");
@@ -252,6 +252,22 @@ public abstract class AbstractHdfsBolt extends BaseRichBolt {
     public void declareOutputFields(OutputFieldsDeclarer outputFieldsDeclarer) {
     }
 
+    @Override
+    public void cleanup() {
+        doRotationAndRemoveAllWriters();
+    }
+
+    private void doRotationAndRemoveAllWriters() {
+        for (final AbstractHDFSWriter writer : writers.values()) {
+            try {
+                rotateOutputFile(writer);
+            } catch (IOException e) {
+                LOG.warn("IOException during scheduled file rotation.", e);
+            }
+        }
+        writers.clear();
+    }
+
     private void syncAllWriters() throws IOException {
         for (AbstractHDFSWriter writer : writers.values()) {
             writer.sync();
@@ -264,14 +280,7 @@ public abstract class AbstractHdfsBolt extends BaseRichBolt {
         TimerTask task = new TimerTask() {
             @Override
             public void run() {
-                for (final AbstractHDFSWriter writer : writers.values()) {
-                    try {
-                        rotateOutputFile(writer);
-                    } catch (IOException e) {
-                        LOG.warn("IOException during scheduled file rotation.", e);
-                    }
-                }
-                writers.clear();
+                doRotationAndRemoveAllWriters();
             }
         };
         this.rotationTimer.scheduleAtFixedRate(task, interval, interval);
@@ -293,7 +302,7 @@ public abstract class AbstractHdfsBolt extends BaseRichBolt {
                 this.fileNameFormat.getName(rotation, System.currentTimeMillis()));
     }
 
-    abstract protected void doPrepare(Map conf, TopologyContext topologyContext, OutputCollector collector) throws IOException;
+    abstract protected void doPrepare(Map<String, Object> conf, TopologyContext topologyContext, OutputCollector collector) throws IOException;
 
     abstract protected String getWriterKey(Tuple tuple);
 

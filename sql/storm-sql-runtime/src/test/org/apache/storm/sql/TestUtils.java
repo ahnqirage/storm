@@ -1,40 +1,22 @@
 /*
- * *
- *  * Licensed to the Apache Software Foundation (ASF) under one
- *  * or more contributor license agreements.  See the NOTICE file
- *  * distributed with this work for additional information
- *  * regarding copyright ownership.  The ASF licenses this file
- *  * to you under the Apache License, Version 2.0 (the
- *  * "License"); you may not use this file except in compliance
- *  * with the License.  You may obtain a copy of the License at
- *  * <p>
- *  * http://www.apache.org/licenses/LICENSE-2.0
- *  * <p>
- *  * Unless required by applicable law or agreed to in writing, software
- *  * distributed under the License is distributed on an "AS IS" BASIS,
- *  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  * See the License for the specific language governing permissions and
- *  * limitations under the License.
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  */
 package org.apache.storm.sql;
-
-import org.apache.storm.sql.runtime.ChannelContext;
-import org.apache.storm.sql.runtime.ChannelHandler;
-import org.apache.storm.sql.runtime.DataSource;
-import org.apache.storm.sql.runtime.ISqlTridentDataSource;
-import org.apache.storm.sql.runtime.SimpleSqlTridentConsumer;
-import org.apache.storm.task.IMetricsContext;
-import org.apache.storm.task.TopologyContext;
-import org.apache.storm.trident.operation.TridentCollector;
-import org.apache.storm.trident.operation.TridentOperationContext;
-import org.apache.storm.trident.spout.IBatchSpout;
-import org.apache.storm.trident.state.State;
-import org.apache.storm.trident.state.StateFactory;
-import org.apache.storm.trident.state.StateUpdater;
-import org.apache.storm.trident.tuple.TridentTuple;
-import org.apache.storm.tuple.Fields;
-import org.apache.storm.tuple.Values;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -44,7 +26,37 @@ import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
 
+import org.apache.storm.spout.SpoutOutputCollector;
+import org.apache.storm.sql.runtime.ISqlStreamsDataSource;
+import org.apache.storm.streams.Pair;
+import org.apache.storm.task.OutputCollector;
+import org.apache.storm.task.TopologyContext;
+import org.apache.storm.topology.IRichBolt;
+import org.apache.storm.topology.IRichSpout;
+import org.apache.storm.topology.OutputFieldsDeclarer;
+import org.apache.storm.topology.base.BaseRichBolt;
+import org.apache.storm.topology.base.BaseRichSpout;
+import org.apache.storm.tuple.Fields;
+import org.apache.storm.tuple.Tuple;
+import org.apache.storm.tuple.Values;
+import org.junit.jupiter.api.extension.BeforeEachCallback;
+import org.junit.jupiter.api.extension.ExtensionContext;
+
 public class TestUtils {
+    public static final class MockInsertBoltExtension implements BeforeEachCallback {
+        @Override
+        public void beforeEach(ExtensionContext ctx) throws Exception {
+            MockInsertBolt.getCollectedValues().clear();
+        }
+    }
+
+    public static final class MockBoltExtension implements BeforeEachCallback {
+        @Override
+        public void beforeEach(ExtensionContext arg0) throws Exception {
+            MockBolt.getCollectedValues().clear();
+        }
+    }
+
   public static class MyPlus {
     public static Integer evaluate(Integer x, Integer y) {
       return x + y;
@@ -62,7 +74,6 @@ public class TestUtils {
       return accumulator;
     }
   }
-
 
   public static class TopN {
     public static PriorityQueue<Integer> init() {
@@ -89,87 +100,236 @@ public class TestUtils {
     }
   }
 
+  public static class MockSpout extends BaseRichSpout {
 
-  public static class MockDataSource implements DataSource {
-    private final ArrayList<Values> RECORDS = new ArrayList<>();
+    private final List<Values> records;
+    private final Fields outputFields;
+    private boolean emitted = false;
+    private SpoutOutputCollector collector;
 
-    public MockDataSource() {
+    public MockSpout(List<Values> records, Fields outputFields) {
+      this.records = records;
+      this.outputFields = outputFields;
+    }
+
+    @Override
+    public void open(Map<String, Object> conf, TopologyContext context, SpoutOutputCollector collector) {
+      this.collector = collector;
+    }
+
+    @Override
+    public void nextTuple() {
+      if (emitted) {
+        return;
+      }
+
+      for (Values r : records) {
+        collector.emit(r);
+      }
+
+      emitted = true;
+    }
+
+    @Override
+    public void declareOutputFields(OutputFieldsDeclarer declarer) {
+      declarer.declare(outputFields);
+    }
+  }
+
+  public static class MockBolt extends BaseRichBolt {
+    /**
+     * Collect all values in a static variable as the instance will go through serialization and deserialization.
+     * NOTE: This should be cleared before or after running each test.
+     */
+    private transient static final List<Values> VALUES = new ArrayList<>();
+
+    public static List<Values> getCollectedValues() {
+      return VALUES;
+    }
+
+    @Override
+    public void prepare(Map<String, Object> topoConf, TopologyContext context, OutputCollector collector) {
+
+    }
+
+    @Override
+    public void execute(Tuple input) {
+      VALUES.add((Values) input.getValue(0));
+    }
+
+    @Override
+    public void declareOutputFields(OutputFieldsDeclarer declarer) {
+
+    }
+  }
+
+  public static class MockInsertBolt extends BaseRichBolt {
+    /**
+     * Collect all values in a static variable as the instance will go through serialization and deserialization.
+     * NOTE: This should be cleared before or after running each test.
+     */
+    private transient static final List<Pair<Object, Values>> VALUES = new ArrayList<>();
+
+    public static List<Pair<Object, Values>> getCollectedValues() {
+      return VALUES;
+    }
+
+    @Override
+    public void prepare(Map<String, Object> topoConf, TopologyContext context, OutputCollector collector) {
+
+    }
+
+    @Override
+    public void execute(Tuple input) {
+      VALUES.add(Pair.of(input.getValue(0), (Values) input.getValue(1)));
+    }
+
+    @Override
+    public void declareOutputFields(OutputFieldsDeclarer declarer) {
+
+    }
+  }
+
+  public static class MockSqlExprDataSource implements ISqlStreamsDataSource {
+    @Override
+    public IRichSpout getProducer() {
+      throw new UnsupportedOperationException("Not supported.");
+    }
+
+    @Override
+    public IRichBolt getConsumer() {
+      return new MockBolt();
+    }
+  }
+
+  public static class MockSqlStreamsOutputDataSource implements ISqlStreamsDataSource {
+
+    @Override
+    public IRichSpout getProducer() {
+      throw new UnsupportedOperationException("Not supported.");
+    }
+
+    @Override
+    public IRichBolt getConsumer() {
+      return new MockInsertBolt();
+    }
+
+  }
+
+  public static class MockSqlStreamsDataSource implements ISqlStreamsDataSource {
+    @Override
+    public IRichSpout getProducer() {
+      List<Values> records = new ArrayList<>();
+      records.add(new Values(0, "a", "y"));
+      records.add(new Values(1, "ab", "y"));
+      records.add(new Values(2, "abc", "y"));
+      records.add(new Values(3, "abcd", "y"));
+      records.add(new Values(4, "abcde", "y"));
+
+      Fields outputFields = new Fields("ID", "NAME", "ADDR");
+      return new MockSpout(records, outputFields);
+    }
+
+    @Override
+    public IRichBolt getConsumer() {
+      return new MockBolt();
+    }
+
+  }
+
+  public static class MockSqlStreamsInsertDataSource extends MockSqlStreamsNestedDataSource {
+    @Override
+    public IRichBolt getConsumer() {
+      return new MockInsertBolt();
+    }
+  }
+
+  public static class MockSqlStreamsGroupedDataSource implements ISqlStreamsDataSource {
+    @Override
+    public IRichSpout getProducer() {
+      List<Values> records = new ArrayList<>();
       for (int i = 0; i < 5; ++i) {
-        RECORDS.add(new Values(i, "x", null));
+        records.add(new Values(i, 0, "x", "y", 5 - i, i * 10));
       }
+
+      Fields outputFields = new Fields("ID", "GRPID", "NAME", "ADDR", "AGE", "SCORE");
+      return new MockSpout(records, outputFields);
     }
 
     @Override
-    public void open(ChannelContext ctx) {
-      for (Values v : RECORDS) {
-        ctx.emit(v);
-      }
-      ctx.fireChannelInactive();
+    public IRichBolt getConsumer() {
+      return new MockBolt();
     }
   }
 
-  public static class MockGroupDataSource implements DataSource {
-    private final ArrayList<Values> RECORDS = new ArrayList<>();
+  public static class MockSqlStreamsInsertGroupedDataSource extends MockSqlStreamsGroupedDataSource {
+    @Override
+    public IRichBolt getConsumer() {
+      return new MockInsertBolt();
+    }
+  }
 
-    public MockGroupDataSource() {
-      for (int i = 0; i < 10; ++i) {
-        RECORDS.add(new Values(i/3, i, (i+1)* 0.5, "x", i/2));
+  public static class MockSqlStreamsJoinDataSourceEmp implements ISqlStreamsDataSource {
+    @Override
+    public IRichSpout getProducer() {
+      List<Values> records = new ArrayList<>();
+      Fields outputFields = new Fields("EMPID", "EMPNAME", "DEPTID");
+
+      for (int i = 0; i < 5; ++i) {
+        records.add(new Values(i, "emp-" + i, i % 2));
       }
+      for (int i = 10; i < 15; ++i) {
+        records.add(new Values(i, "emp-" + i, i));
+      }
+
+      return new MockSpout(records, outputFields);
     }
 
     @Override
-    public void open(ChannelContext ctx) {
-      for (Values v : RECORDS) {
-        ctx.emit(v);
-      }
-      // force evaluation of the aggregate function on the last group
-      ctx.flush();
-      ctx.fireChannelInactive();
+    public IRichBolt getConsumer() {
+      return new MockBolt();
     }
   }
 
-  public static class MockEmpDataSource implements DataSource {
-    private final ArrayList<Values> RECORDS = new ArrayList<>();
+  public static class MockSqlStreamsInsertJoinDataSourceEmp extends MockSqlStreamsJoinDataSourceEmp {
+    @Override
+    public IRichBolt getConsumer() {
+      return new MockInsertBolt();
+    }
+  }
 
-    public MockEmpDataSource() {
-      RECORDS.add(new Values(1, "emp1", 1));
-      RECORDS.add(new Values(2, "emp2", 1));
-      RECORDS.add(new Values(3, "emp3", 2));
+  public static class MockSqlStreamsJoinDataSourceDept implements ISqlStreamsDataSource {
+    @Override
+    public IRichSpout getProducer() {
+      List<Values> records = new ArrayList<>();
+      Fields outputFields = new Fields("DEPTID", "DEPTNAME");
+
+      for (int i = 0; i < 5; ++i) {
+        records.add(new Values(i, "dept-" + i));
+      }
+
+      return new MockSpout(records, outputFields);
     }
 
     @Override
-    public void open(ChannelContext ctx) {
-      for (Values v : RECORDS) {
-        ctx.emit(v);
-      }
-      ctx.flush();
-      ctx.fireChannelInactive();
+    public IRichBolt getConsumer() {
+      return new MockBolt();
     }
   }
 
-  public static class MockDeptDataSource implements DataSource {
-    private final ArrayList<Values> RECORDS = new ArrayList<>();
-
-    public MockDeptDataSource() {
-      RECORDS.add(new Values(1, "dept1"));
-      RECORDS.add(new Values(2, "dept2"));
-      RECORDS.add(new Values(3, "dept3"));
-    }
-
+  public static class MockSqlStreamsInsertJoinDataSourceDept extends MockSqlStreamsJoinDataSourceDept {
     @Override
-    public void open(ChannelContext ctx) {
-      for (Values v : RECORDS) {
-        ctx.emit(v);
-      }
-      ctx.flush();
-      ctx.fireChannelInactive();
+    public IRichBolt getConsumer() {
+      return new MockInsertBolt();
     }
   }
 
-  public static class MockNestedDataSource implements DataSource {
-    private final ArrayList<Values> RECORDS = new ArrayList<>();
+  public static class MockSqlStreamsNestedDataSource implements ISqlStreamsDataSource {
+    @Override
+    public IRichSpout getProducer() {
+      List<Values> records = new ArrayList<>();
+      Fields outputFields = new Fields("ID", "MAPFIELD", "NESTEDMAPFIELD", "ARRAYFIELD");
 
-    public MockNestedDataSource() {
       List<Integer> ints = Arrays.asList(100, 200, 300);
       for (int i = 0; i < 5; ++i) {
         Map<String, Integer> map = new HashMap<>();
@@ -177,404 +337,23 @@ public class TestUtils {
         map.put("c", i*i);
         Map<String, Map<String, Integer>> mm = new HashMap<>();
         mm.put("a", map);
-        RECORDS.add(new Values(i, map, mm, ints));
+        records.add(new Values(i, map, mm, ints));
       }
+
+      return new MockSpout(records, outputFields);
     }
 
     @Override
-    public void open(ChannelContext ctx) {
-      for (Values v : RECORDS) {
-        ctx.emit(v);
-      }
-      ctx.fireChannelInactive();
+    public IRichBolt getConsumer() {
+      return new MockBolt();
     }
   }
 
-  public static class MockState implements State {
-    /**
-     * Collect all values in a static variable as the instance will go through serialization and deserialization.
-     * NOTE: This should be cleared before or after running each test.
-     */
-    private transient static final List<List<Object> > VALUES = new ArrayList<>();
-
-    public static List<List<Object>> getCollectedValues() {
-      return VALUES;
-    }
-
+  public static class MockSqlStreamsInsertNestedDataSource extends MockSqlStreamsNestedDataSource {
     @Override
-    public void beginCommit(Long txid) {
-      // NOOP
+    public IRichBolt getConsumer() {
+      return new MockInsertBolt();
     }
-
-    @Override
-    public void commit(Long txid) {
-      // NOOP
-    }
-
-    public void updateState(List<TridentTuple> tuples, TridentCollector collector) {
-      for (TridentTuple tuple : tuples) {
-        VALUES.add(tuple.getValues());
-      }
-    }
-  }
-
-  public static class MockStateFactory implements StateFactory {
-
-    @Override
-    public State makeState(Map<String, Object> conf, IMetricsContext metrics, int partitionIndex, int numPartitions) {
-      return new MockState();
-    }
-  }
-
-  public static class MockStateUpdater implements StateUpdater<MockState> {
-
-    @Override
-    public void updateState(MockState state, List<TridentTuple> tuples, TridentCollector collector) {
-      state.updateState(tuples, collector);
-    }
-
-    @Override
-    public void prepare(Map<String, Object> conf, TridentOperationContext context) {
-      // NOOP
-    }
-
-    @Override
-    public void cleanup() {
-      // NOOP
-    }
-  }
-
-  public static class MockSqlTridentDataSource implements ISqlTridentDataSource {
-    @Override
-    public IBatchSpout getProducer() {
-      return new MockSpout();
-    }
-
-    @Override
-    public SqlTridentConsumer getConsumer() {
-      return new SimpleSqlTridentConsumer(new MockStateFactory(), new MockStateUpdater());
-    }
-
-    private static class MockSpout implements IBatchSpout {
-      private final ArrayList<Values> RECORDS = new ArrayList<>();
-      private final Fields OUTPUT_FIELDS = new Fields("ID", "NAME", "ADDR");
-
-      public MockSpout() {
-        RECORDS.add(new Values(0, "a", "y"));
-        RECORDS.add(new Values(1, "ab", "y"));
-        RECORDS.add(new Values(2, "abc", "y"));
-        RECORDS.add(new Values(3, "abcd", "y"));
-        RECORDS.add(new Values(4, "abcde", "y"));
-      }
-
-      private boolean emitted = false;
-
-      @Override
-      public void open(Map<String, Object> conf, TopologyContext context) {
-      }
-
-      @Override
-      public void emitBatch(long batchId, TridentCollector collector) {
-        if (emitted) {
-          return;
-        }
-
-        for (Values r : RECORDS) {
-          collector.emit(r);
-        }
-        emitted = true;
-      }
-
-      @Override
-      public void ack(long batchId) {
-      }
-
-      @Override
-      public void close() {
-      }
-
-      @Override
-      public Map<String, Object> getComponentConfiguration() {
-        return null;
-      }
-
-      @Override
-      public Fields getOutputFields() {
-        return OUTPUT_FIELDS;
-      }
-    }
-  }
-
-  public static class MockSqlTridentGroupedDataSource implements ISqlTridentDataSource {
-    @Override
-    public IBatchSpout getProducer() {
-      return new MockGroupedSpout();
-    }
-
-    @Override
-    public SqlTridentConsumer getConsumer() {
-      return new SimpleSqlTridentConsumer(new MockStateFactory(), new MockStateUpdater());
-    }
-
-    private static class MockGroupedSpout implements IBatchSpout {
-      private final ArrayList<Values> RECORDS = new ArrayList<>();
-      private final Fields OUTPUT_FIELDS = new Fields("ID", "GRPID", "NAME", "ADDR", "AGE", "SCORE");
-
-      public MockGroupedSpout() {
-        for (int i = 0; i < 5; ++i) {
-          RECORDS.add(new Values(i, 0, "x", "y", 5 - i, i * 10));
-        }
-      }
-
-      private boolean emitted = false;
-
-      @Override
-      public void open(Map<String, Object> conf, TopologyContext context) {
-      }
-
-      @Override
-      public void emitBatch(long batchId, TridentCollector collector) {
-        if (emitted) {
-          return;
-        }
-
-        for (Values r : RECORDS) {
-          collector.emit(r);
-        }
-        emitted = true;
-      }
-
-      @Override
-      public void ack(long batchId) {
-      }
-
-      @Override
-      public void close() {
-      }
-
-      @Override
-      public Map<String, Object> getComponentConfiguration() {
-        return null;
-      }
-
-      @Override
-      public Fields getOutputFields() {
-        return OUTPUT_FIELDS;
-      }
-    }
-  }
-
-  public static class MockSqlTridentJoinDataSourceEmp implements ISqlTridentDataSource {
-    @Override
-    public IBatchSpout getProducer() {
-      return new MockSpout();
-    }
-
-    @Override
-    public SqlTridentConsumer getConsumer() {
-      return new SimpleSqlTridentConsumer(new MockStateFactory(), new MockStateUpdater());
-    }
-
-    private static class MockSpout implements IBatchSpout {
-      private final ArrayList<Values> RECORDS = new ArrayList<>();
-      private final Fields OUTPUT_FIELDS = new Fields("EMPID", "EMPNAME", "DEPTID");
-
-      public MockSpout() {
-        for (int i = 0; i < 5; ++i) {
-          RECORDS.add(new Values(i, "emp-" + i, i % 2));
-        }
-        for (int i = 10; i < 15; ++i) {
-          RECORDS.add(new Values(i, "emp-" + i, i));
-        }
-      }
-
-      private boolean emitted = false;
-
-      @Override
-      public void open(Map<String, Object> conf, TopologyContext context) {
-      }
-
-      @Override
-      public void emitBatch(long batchId, TridentCollector collector) {
-        if (emitted) {
-          return;
-        }
-
-        for (Values r : RECORDS) {
-          collector.emit(r);
-        }
-        emitted = true;
-      }
-
-      @Override
-      public void ack(long batchId) {
-      }
-
-      @Override
-      public void close() {
-      }
-
-      @Override
-      public Map<String, Object> getComponentConfiguration() {
-        return null;
-      }
-
-      @Override
-      public Fields getOutputFields() {
-        return OUTPUT_FIELDS;
-      }
-    }
-  }
-
-  public static class MockSqlTridentJoinDataSourceDept implements ISqlTridentDataSource {
-    @Override
-    public IBatchSpout getProducer() {
-      return new MockSpout();
-    }
-
-    @Override
-    public SqlTridentConsumer getConsumer() {
-      return new SimpleSqlTridentConsumer(new MockStateFactory(), new MockStateUpdater());
-    }
-
-    private static class MockSpout implements IBatchSpout {
-      private final ArrayList<Values> RECORDS = new ArrayList<>();
-      private final Fields OUTPUT_FIELDS = new Fields("DEPTID", "DEPTNAME");
-
-      public MockSpout() {
-        for (int i = 0; i < 5; ++i) {
-          RECORDS.add(new Values(i, "dept-" + i));
-        }
-      }
-
-      private boolean emitted = false;
-
-      @Override
-      public void open(Map<String, Object> conf, TopologyContext context) {
-      }
-
-      @Override
-      public void emitBatch(long batchId, TridentCollector collector) {
-        if (emitted) {
-          return;
-        }
-
-        for (Values r : RECORDS) {
-          collector.emit(r);
-        }
-        emitted = true;
-      }
-
-      @Override
-      public void ack(long batchId) {
-      }
-
-      @Override
-      public void close() {
-      }
-
-      @Override
-      public Map<String, Object> getComponentConfiguration() {
-        return null;
-      }
-
-      @Override
-      public Fields getOutputFields() {
-        return OUTPUT_FIELDS;
-      }
-    }
-  }
-
-  public static class MockSqlTridentNestedDataSource implements ISqlTridentDataSource {
-    @Override
-    public IBatchSpout getProducer() {
-      return new MockSpout();
-    }
-
-    @Override
-    public SqlTridentConsumer getConsumer() {
-      return new SimpleSqlTridentConsumer(new MockStateFactory(), new MockStateUpdater());
-    }
-
-    private static class MockSpout implements IBatchSpout {
-      private final ArrayList<Values> RECORDS = new ArrayList<>();
-      private final Fields OUTPUT_FIELDS = new Fields("ID", "MAPFIELD", "NESTEDMAPFIELD", "ARRAYFIELD");
-
-      public MockSpout() {
-        List<Integer> ints = Arrays.asList(100, 200, 300);
-        for (int i = 0; i < 5; ++i) {
-          Map<String, Integer> map = new HashMap<>();
-          map.put("b", i);
-          map.put("c", i*i);
-          Map<String, Map<String, Integer>> mm = new HashMap<>();
-          mm.put("a", map);
-          RECORDS.add(new Values(i, map, mm, ints));
-        }
-      }
-
-      private boolean emitted = false;
-
-      @Override
-      public void open(Map<String, Object> conf, TopologyContext context) {
-      }
-
-      @Override
-      public void emitBatch(long batchId, TridentCollector collector) {
-        if (emitted) {
-          return;
-        }
-
-        for (Values r : RECORDS) {
-          collector.emit(r);
-        }
-        emitted = true;
-      }
-
-      @Override
-      public void ack(long batchId) {
-      }
-
-      @Override
-      public void close() {
-      }
-
-      @Override
-      public Map<String, Object> getComponentConfiguration() {
-        return null;
-      }
-
-      @Override
-      public Fields getOutputFields() {
-        return OUTPUT_FIELDS;
-      }
-    }
-  }
-
-  public static class CollectDataChannelHandler implements ChannelHandler {
-    private final List<Values> values;
-
-    public CollectDataChannelHandler(List<Values> values) {
-      this.values = values;
-    }
-
-    @Override
-    public void dataReceived(ChannelContext ctx, Values data) {
-      values.add(data);
-    }
-
-    @Override
-    public void channelInactive(ChannelContext ctx) {}
-
-    @Override
-    public void exceptionCaught(Throwable cause) {
-      throw new RuntimeException(cause);
-    }
-
-    @Override
-    public void flush(ChannelContext ctx) {}
-
-    @Override
-    public void setSource(ChannelContext ctx, Object source) {}
   }
 
   public static long monotonicNow() {

@@ -18,15 +18,16 @@
 
 package org.apache.storm.solr.trident;
 
+import java.io.IOException;
+
 import org.apache.storm.generated.StormTopology;
-import org.apache.storm.tuple.Fields;
+import org.apache.storm.solr.config.SolrConfig;
 import org.apache.storm.solr.spout.SolrFieldsSpout;
 import org.apache.storm.solr.topology.SolrFieldsTopology;
 import org.apache.storm.trident.Stream;
 import org.apache.storm.trident.TridentTopology;
 import org.apache.storm.trident.state.StateFactory;
-
-import java.io.IOException;
+import org.apache.storm.tuple.Fields;
 
 public class SolrFieldsTridentTopology extends SolrFieldsTopology {
     public static void main(String[] args) throws Exception {
@@ -34,11 +35,13 @@ public class SolrFieldsTridentTopology extends SolrFieldsTopology {
         solrFieldsTridentTopology.run(args);
     }
 
+    @Override
     protected StormTopology getTopology() throws IOException {
         final TridentTopology tridentTopology = new TridentTopology();
         final SolrFieldsSpout spout = new SolrFieldsSpout();
         final Stream stream = tridentTopology.newStream("SolrFieldsSpout", spout);
-        final StateFactory solrStateFactory = new SolrStateFactory(getSolrConfig(), getSolrMapper());
+        SolrConfig solrConfig = getSolrConfig();
+        final StateFactory solrStateFactory = new SolrStateFactory(solrConfig, getSolrMapper(solrConfig));
         stream.partitionPersist(solrStateFactory, spout.getOutputFields(),  new SolrUpdater(), new Fields());
         return tridentTopology.build();
     }

@@ -1,20 +1,15 @@
 /**
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.  The ASF licenses this file to you under the Apache License, Version
+ * 2.0 (the "License"); you may not use this file except in compliance with the License.  You may obtain a copy of the License at
  *
  * http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions
+ * and limitations under the License.
  */
+
 package org.apache.storm.windowing;
 
 import org.slf4j.Logger;
@@ -23,16 +18,15 @@ import org.slf4j.LoggerFactory;
 /**
  * Eviction policy that evicts events based on time duration.
  */
-public class TimeEvictionPolicy<T> implements EvictionPolicy<T> {
+public class TimeEvictionPolicy<T> implements EvictionPolicy<T, EvictionContext> {
     private static final Logger LOG = LoggerFactory.getLogger(TimeEvictionPolicy.class);
 
     private final int windowLength;
-    protected EvictionContext evictionContext;
+    protected volatile EvictionContext evictionContext;
     private long delta;
 
     /**
-     * Constructs a TimeEvictionPolicy that evicts events older
-     * than the given window length in millis
+     * Constructs a TimeEvictionPolicy that evicts events older than the given window length in millis.
      *
      * @param windowLength the duration in milliseconds
      */
@@ -44,7 +38,7 @@ public class TimeEvictionPolicy<T> implements EvictionPolicy<T> {
      * {@inheritDoc}
      */
     @Override
-    public Action evict(Event<T> event) {      
+    public Action evict(Event<T> event) {
         long now = evictionContext == null ? System.currentTimeMillis() : evictionContext.getReferenceTime();
         long diff = now - event.getTimestamp();
         if (diff >= (windowLength + delta)) {
@@ -61,6 +55,11 @@ public class TimeEvictionPolicy<T> implements EvictionPolicy<T> {
     }
 
     @Override
+    public EvictionContext getContext() {
+        return evictionContext;
+    }
+
+    @Override
     public void setContext(EvictionContext context) {
         EvictionContext prevContext = evictionContext;
         evictionContext = context;
@@ -71,25 +70,35 @@ public class TimeEvictionPolicy<T> implements EvictionPolicy<T> {
             } else {
                 delta = context.getReferenceTime() - prevContext.getReferenceTime() - context.getSlidingInterval();
                 if (Math.abs(delta) > 100) {
-                    LOG.warn("Possible clock drift or long running computation in window; " +
-                                    "Previous eviction time: {}, current eviction time: {}",
-                            prevContext.getReferenceTime(),
-                            context.getReferenceTime());
+                    LOG.warn("Possible clock drift or long running computation in window; "
+                                    + "Previous eviction time: {}, current eviction time: {}",
+                             prevContext.getReferenceTime(),
+                             context.getReferenceTime());
                 }
             }
         }
     }
 
     @Override
-    public EvictionContext getContext() {
+    public void reset() {
+        // NOOP
+    }
+
+    @Override
+    public EvictionContext getState() {
         return evictionContext;
     }
 
     @Override
+    public void restoreState(EvictionContext state) {
+        this.evictionContext = state;
+    }
+
+    @Override
     public String toString() {
-        return "TimeEvictionPolicy{" +
-                "windowLength=" + windowLength +
-                ", evictionContext=" + evictionContext +
-                '}';
+        return "TimeEvictionPolicy{"
+                + "windowLength=" + windowLength
+                + ", evictionContext=" + evictionContext
+                + '}';
     }
 }

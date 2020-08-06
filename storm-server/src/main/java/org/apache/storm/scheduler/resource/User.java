@@ -18,8 +18,9 @@
 
 package org.apache.storm.scheduler.resource;
 
-import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
@@ -32,29 +33,30 @@ import org.apache.storm.scheduler.SchedulerAssignment;
 import org.apache.storm.scheduler.TopologyDetails;
 
 public class User {
-    private String userId;
-
-    //Topologies that was deemed to be invalid
+    //Topologies that were deemed to be invalid
     private final Set<TopologyDetails> unsuccess = new HashSet<>();
-
     private final double cpuGuarantee;
     private final double memoryGuarantee;
+    private final Map<String, Double> genericGuarantee;
+    private String userId;
 
     public User(String userId) {
-        this(userId, 0, 0);
+        this(userId, 0, 0, Collections.emptyMap());
     }
 
     public User(String userId, Map<String, Double> resourcePool) {
         this(
             userId,
             resourcePool == null ? 0.0 : resourcePool.getOrDefault("cpu", 0.0),
-            resourcePool == null ? 0.0 : resourcePool.getOrDefault("memory", 0.0));
+            resourcePool == null ? 0.0 : resourcePool.getOrDefault("memory", 0.0),
+            resourcePool == null ? Collections.emptyMap() : extractGenericResourceEntries(resourcePool));
     }
 
-    private User(String userId, double cpuGuarantee, double memoryGuarantee) {
+    private User(String userId, double cpuGuarantee, double memoryGuarantee, Map<String, Double> genericGuarantee) {
         this.userId = userId;
         this.cpuGuarantee = cpuGuarantee;
         this.memoryGuarantee = memoryGuarantee;
+        this.genericGuarantee = genericGuarantee;
     }
 
     public String getId() {
@@ -63,7 +65,7 @@ public class User {
 
     public TreeSet<TopologyDetails> getRunningTopologies(ISchedulingState cluster) {
         TreeSet<TopologyDetails> ret =
-            new TreeSet<TopologyDetails>(new PQsortByPriorityAndSubmittionTime());
+            new TreeSet<>(new PQsortByPriorityAndSubmittionTime());
         for (TopologyDetails td : cluster.getTopologies().getTopologiesOwnedBy(userId)) {
             if (!cluster.needsSchedulingRas(td)) {
                 ret.add(td);
@@ -74,7 +76,7 @@ public class User {
 
     public TreeSet<TopologyDetails> getPendingTopologies(ISchedulingState cluster) {
         TreeSet<TopologyDetails> ret =
-            new TreeSet<TopologyDetails>(new PQsortByPriorityAndSubmittionTime());
+            new TreeSet<>(new PQsortByPriorityAndSubmittionTime());
         for (TopologyDetails td : cluster.getTopologies().getTopologiesOwnedBy(userId)) {
             if (cluster.needsSchedulingRas(td) && !unsuccess.contains(td)) {
                 ret.add(td);
@@ -83,15 +85,18 @@ public class User {
         return ret;
     }
 
-    public void markTopoUnsuccess(TopologyDetails topo, Cluster cluster) {
+    public void markTopoUnsuccess(TopologyDetails topo, Cluster cluster, String msg) {
         unsuccess.add(topo);
         if (cluster != null) {
-            cluster.setStatus(topo.getId(), "Scheduling Attempted but topology is invalid");
+            if (msg == null) {
+                msg = "Scheduling Attempted but topology is invalid";
+            }
+            cluster.setStatus(topo.getId(), msg);
         }
     }
 
     public void markTopoUnsuccess(TopologyDetails topo) {
-        this.markTopoUnsuccess(topo, null);
+        this.markTopoUnsuccess(topo, null, null);
     }
 
     public double getResourcePoolAverageUtilization(ISchedulingState cluster) {
@@ -116,6 +121,24 @@ public class User {
             return Double.MAX_VALUE;
         }
         return getMemoryResourceUsedByUser(cluster) / memoryGuarantee;
+    }
+
+    public double getMemoryResourceRequest(ISchedulingState cluster) {
+        double sum = 0.0;
+        Set<TopologyDetails> topologyDetailsSet = new HashSet<>(cluster.getTopologies().getTopologiesOwnedBy(userId));
+        for (TopologyDetails topo : topologyDetailsSet) {
+            sum += topo.getTotalRequestedMemOnHeap() + topo.getTotalRequestedMemOffHeap();
+        }
+        return sum;
+    }
+
+    public double getCpuResourceRequest(ISchedulingState cluster) {
+        double sum = 0.0;
+        Set<TopologyDetails> topologyDetailsSet = new HashSet<>(cluster.getTopologies().getTopologiesOwnedBy(userId));
+        for (TopologyDetails topo : topologyDetailsSet) {
+            sum += topo.getTotalRequestedCpu();
+        }
+        return sum;
     }
 
     public double getCpuResourceUsedByUser(ISchedulingState cluster) {
@@ -150,6 +173,10 @@ public class User {
         return cpuGuarantee;
     }
 
+    public Map<String, Double> getGenericGuaranteed() {
+        return genericGuarantee;
+    }
+
     public TopologyDetails getNextTopologyToSchedule(ISchedulingState cluster) {
         for (TopologyDetails topo : getPendingTopologies(cluster)) {
             return topo;
@@ -167,6 +194,18 @@ public class User {
             return null;
         }
         return queue.last();
+    }
+
+    private static Map<String, Double> extractGenericResourceEntries(Map<String, Double> resourcePool) {
+        Map<String, Double> ret = new HashMap<>();
+        for (Map.Entry<String, Double> entry : resourcePool.entrySet()) {
+            String key = entry.getKey();
+            Double value = entry.getValue();
+            if (key != null && !key.equals("cpu") && !key.equals("memory")) {
+                ret.put(key, value);
+            }
+        }
+        return ret;
     }
 
     @Override
@@ -187,28 +226,13 @@ public class User {
         return this.userId;
     }
 
-    public String getDetailedInfo() {
-        String ret = "\nUser: " + userId;
-        ret += "\n - " + " Resource Pool: " + cpuGuarantee + "% " + memoryGuarantee + "MB ";
-        ret += "\n - " + " Unsuccess Queue: " + unsuccess + " size: " + unsuccess.size();
-        return ret;
-    }
-
-    public static String getResourcePoolAverageUtilizationForUsers(
-        Collection<User> users, Cluster cluster) {
-        String ret = "";
-        for (User user : users) {
-            ret += user.getId() + " - " + user.getResourcePoolAverageUtilization(cluster) + " ";
-        }
-        return ret;
-    }
-
     /**
-     * Comparator that sorts topologies by priority and then by submission time First sort by Topology
-     * Priority, if there is a tie for topology priority, topology uptime is used to sort.
+     * Comparator that sorts topologies by priority and then by submission time First sort by Topology Priority, if there is a tie for
+     * topology priority, topology uptime is used to sort.
      */
     static class PQsortByPriorityAndSubmittionTime implements Comparator<TopologyDetails> {
 
+        @Override
         public int compare(TopologyDetails topo1, TopologyDetails topo2) {
             if (topo1.getTopologyPriority() > topo2.getTopologyPriority()) {
                 return 1;

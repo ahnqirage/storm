@@ -71,7 +71,7 @@ HiveOptions params
 |dbName | database name | String (required) |
 |tblName | table name | String (required) |
 |mapper| Mapper class to map Tuple field names to Table column names | DelimitedRecordHiveMapper or JsonRecordHiveMapper (required) |
-|withTxnsPerBatch | Hive grants a *batch of transactions* instead of single transactions to streaming clients like HiveBolt.This setting configures the number of desired transactions per Transaction Batch. Data from all transactions in a single batch end up in a single file. Flume will write a maximum of batchSize events in each transaction in the batch. This setting in conjunction with batchSize provides control over the size of each file. Note that eventually Hive will transparently compact these files into larger files.| Integer . default 100 |
+|withTxnsPerBatch | Hive grants a *batch of transactions* instead of single transactions to streaming clients like HiveBolt.This setting configures the number of desired transactions per Transaction Batch. Data from all transactions in a single batch end up in a single file. HiveBolt will write a maximum of batchSize events in each transaction in the batch. This setting in conjunction with batchSize provides control over the size of each file. Note that eventually Hive will transparently compact these files into larger files.| Integer . default 100 |
 |withMaxOpenConnections| Allow only this number of open connections. If this number is exceeded, the least recently used connection is closed.| Integer . default 100|
 |withBatchSize| Max number of events written to Hive in a single Hive transaction| Integer. default 15000|
 |withCallTimeout| (In milliseconds) Timeout for Hive & HDFS I/O operations, such as openTxn, write, commit, abort. | Integer. default 10000|
@@ -128,8 +128,8 @@ nimbus.autocredential.plugins.classes : ["org.apache.storm.hive.security.AutoHiv
 nimbus.credential.renewers.classes : ["org.apache.storm.hive.security.AutoHive", "org.apache.storm.hdfs.security.AutoHDFS"]
 nimbus.credential.renewers.freq.secs : 82800 (23 hours)
 
-hive.keytab.file: "/path/to/keytab/on/nimbus" (This is the keytab of hive super user that can impersonate other users.)
-hive.kerberos.principal: "superuser@EXAMPLE.com"
+hive.keytab.file: "/path/to/keytab/on/nimbus" (Keytab of The Hive metastore thrift server service principal. This is used to impersonate other users.)
+hive.kerberos.principal: "hive-metastore/_HOST@EXAMPLE.com" (The service principal for the metastore thrift server.)
 hive.metastore.uris: "thrift://server:9083"
 
 //hdfs configs

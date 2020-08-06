@@ -20,13 +20,14 @@ package org.apache.storm.daemon.utils;
 
 import static java.util.stream.Collectors.joining;
 
-import java.net.URLEncoder;
 import java.util.Map;
+import org.apache.storm.utils.Utils;
 
 /**
  * Convenient utility class to build the URL.
  */
 public class UrlBuilder {
+
     private UrlBuilder() {
     }
 
@@ -44,8 +45,12 @@ public class UrlBuilder {
             sb.append("?");
 
             String queryParam = parameters.entrySet().stream()
-                    .map(entry -> URLEncoder.encode(entry.getKey()) + "=" + URLEncoder.encode(entry.getValue().toString()))
-                    .collect(joining("&"));
+                .map(entry -> {
+                    return Utils.urlEncodeUtf8(entry.getKey())
+                        + "="
+                        + Utils.urlEncodeUtf8(entry.getValue().toString());
+                })
+                .collect(joining("&"));
             sb.append(queryParam);
         }
         return sb.toString();

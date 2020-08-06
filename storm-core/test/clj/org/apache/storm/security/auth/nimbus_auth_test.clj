@@ -15,26 +15,30 @@
 ;; limitations under the License.
 (ns org.apache.storm.security.auth.nimbus-auth-test
   (:use [clojure test])
-  (:require [org.apache.storm.security.auth [auth-test :refer [nimbus-timeout]]])
   (:import [java.nio ByteBuffer])
   (:import [java.util Optional])
   (:import [org.apache.storm LocalCluster$Builder DaemonConfig Config])
   (:import [org.apache.storm.blobstore BlobStore])
-  (:import [org.apache.storm.utils NimbusClient])
+  (:import [org.apache.storm.daemon.nimbus TopoCache])
   (:import [org.apache.storm.generated NotAliveException StormBase])
-  (:import [org.apache.storm.security.auth AuthUtils ThriftServer ThriftClient
+  (:import [org.apache.storm.security.auth ThriftServer ThriftClient
                                          ReqContext ThriftConnectionType])
   (:import [org.apache.storm.generated Nimbus Nimbus$Client Nimbus$Processor
             AuthorizationException SubmitOptions TopologyInitialStatus KillOptions])
-  (:import [org.apache.storm.utils ConfigUtils Utils])
+  (:import [org.apache.storm.utils ConfigUtils NimbusClient Utils])
   (:import [org.apache.storm.cluster IStormClusterState])
   (:import [org.mockito Mockito Matchers])
   (:use [org.apache.storm util config daemon-config log])
   (:require [conjure.core])
   (:use [conjure core]))
 
+;; 3 seconds in milliseconds
+;; This is plenty of time for a thrift client to respond.
+(def nimbus-timeout (Integer. (* 3 1000)))
+
 (defn to-conf [nimbus-port login-cfg aznClass transportPluginClass]
   (let [conf {NIMBUS-AUTHORIZER aznClass
+              SUPERVISOR-AUTHORIZER "org.apache.storm.security.auth.authorizer.NoopAuthorizer"
               NIMBUS-THRIFT-PORT nimbus-port
               STORM-THRIFT-TRANSPORT-PLUGIN transportPluginClass }
          conf (if login-cfg (merge conf {"java.security.auth.login.config" login-cfg}) conf)]
@@ -64,15 +68,18 @@
 (deftest test-noop-authorization-w-simple-transport
   (let [cluster-state (Mockito/mock IStormClusterState)
         blob-store (Mockito/mock BlobStore)
+        tc (Mockito/mock TopoCache)
         topo-name "topo-name"]
     (.thenReturn (Mockito/when (.getTopoId cluster-state topo-name)) (Optional/empty))
     (with-open [cluster (.build
                           (doto (LocalCluster$Builder.)
                             (.withClusterState cluster-state)
                             (.withBlobStore blob-store)
+                            (.withTopoCache tc)
                             (.withNimbusDaemon)
                             (.withDaemonConf
                                {NIMBUS-AUTHORIZER "org.apache.storm.security.auth.authorizer.NoopAuthorizer"
+                                SUPERVISOR-AUTHORIZER "org.apache.storm.security.auth.authorizer.NoopAuthorizer"
                                 NIMBUS-THRIFT-PORT 0
                                 STORM-THRIFT-TRANSPORT-PLUGIN "org.apache.storm.security.auth.SimpleTransportPlugin"})))]
       (let [storm-conf (merge (clojurify-structure (ConfigUtils/readStormConfig))
@@ -88,17 +95,20 @@
 (deftest test-deny-authorization-w-simple-transport
   (let [cluster-state (Mockito/mock IStormClusterState)
         blob-store (Mockito/mock BlobStore)
+        tc (Mockito/mock TopoCache)
         topo-name "topo-name"
         topo-id "topo-name-1"]
     (.thenReturn (Mockito/when (.getTopoId cluster-state topo-name)) (Optional/of topo-id))
-    (.thenReturn (Mockito/when (.readTopologyConf blob-store (Mockito/any String) (Mockito/anyObject))) {})
+    (.thenReturn (Mockito/when (.readTopoConf tc (Mockito/any String) (Mockito/anyObject))) {})
     (with-open [cluster (.build
                           (doto (LocalCluster$Builder.)
                             (.withClusterState cluster-state)
                             (.withBlobStore blob-store)
+                            (.withTopoCache tc)
                             (.withNimbusDaemon)
                             (.withDaemonConf
                                {NIMBUS-AUTHORIZER "org.apache.storm.security.auth.authorizer.DenyAuthorizer"
+                                SUPERVISOR-AUTHORIZER "org.apache.storm.security.auth.authorizer.DenyAuthorizer"
                                 NIMBUS-THRIFT-PORT 0
                                 STORM-THRIFT-TRANSPORT-PLUGIN "org.apache.storm.security.auth.SimpleTransportPlugin"})))]
       (let [storm-conf (merge (clojurify-structure (ConfigUtils/readStormConfig))
@@ -115,7 +125,6 @@
 
         (is (thrown-cause? AuthorizationException (.uploadChunk nimbus_client nil nil)))
         (is (thrown-cause? AuthorizationException (.finishFileUpload nimbus_client nil)))
-        (is (thrown-cause? AuthorizationException (.beginFileDownload nimbus_client nil)))
         (is (thrown-cause? AuthorizationException (.downloadChunk nimbus_client nil)))
         (is (thrown-cause? AuthorizationException (.getNimbusConf nimbus_client)))
         (is (thrown-cause? AuthorizationException (.getClusterInfo nimbus_client)))
@@ -150,17 +159,20 @@
 (deftest test-deny-authorization-w-sasl-digest
   (let [cluster-state (Mockito/mock IStormClusterState)
         blob-store (Mockito/mock BlobStore)
+        tc (Mockito/mock TopoCache)
         topo-name "topo-name"
         topo-id "topo-name-1"]
     (.thenReturn (Mockito/when (.getTopoId cluster-state topo-name)) (Optional/of topo-id))
-    (.thenReturn (Mockito/when (.readTopologyConf blob-store (Mockito/any String) (Mockito/anyObject))) {})
+    (.thenReturn (Mockito/when (.readTopoConf tc (Mockito/any String) (Mockito/anyObject))) {})
     (with-open [cluster (.build
                           (doto (LocalCluster$Builder.)
                             (.withClusterState cluster-state)
                             (.withBlobStore blob-store)
+                            (.withTopoCache tc)
                             (.withNimbusDaemon)
                             (.withDaemonConf
                                {NIMBUS-AUTHORIZER "org.apache.storm.security.auth.authorizer.DenyAuthorizer"
+                                SUPERVISOR-AUTHORIZER "org.apache.storm.security.auth.authorizer.DenyAuthorizer"
                                 NIMBUS-THRIFT-PORT 0
                                 "java.security.auth.login.config" "test/clj/org/apache/storm/security/auth/jaas_digest.conf"
                                 STORM-THRIFT-TRANSPORT-PLUGIN "org.apache.storm.security.auth.digest.DigestSaslTransportPlugin"})))]
@@ -179,7 +191,6 @@
 
         (is (thrown-cause? AuthorizationException (.uploadChunk nimbus_client nil nil)))
         (is (thrown-cause? AuthorizationException (.finishFileUpload nimbus_client nil)))
-        (is (thrown-cause? AuthorizationException (.beginFileDownload nimbus_client nil)))
         (is (thrown-cause? AuthorizationException (.downloadChunk nimbus_client nil)))
         (is (thrown-cause? AuthorizationException (.getNimbusConf nimbus_client)))
         (is (thrown-cause? AuthorizationException (.getClusterInfo nimbus_client)))

@@ -90,7 +90,7 @@ _If you are interested in contributing code to Storm but do not know where to be
 In this case you should
 [browse our issue tracker for open issues and tasks](https://issues.apache.org/jira/browse/STORM/?selectedTab=com.atlassian.jira.jira-projects-plugin:issues-panel).
 You may want to start with beginner-friendly, easier issues
-([newbie issues](https://issues.apache.org/jira/browse/STORM-58?jql=project%20%3D%20STORM%20AND%20labels%20%3D%20newbie%20AND%20status%20%3D%20Open)
+([newbie issues](https://issues.apache.org/jira/issues/?jql=project%20%3D%20STORM%20AND%20status%20%3D%20Open%20AND%20labels%20%3D%20newbie)
 and
 [trivial issues](https://issues.apache.org/jira/secure/IssueNavigator.jspa?reset=true&jqlQuery=project+%3D+STORM+AND+resolution+%3D+Unresolved+AND+priority+%3D+Trivial+ORDER+BY+key+DESC&mode=hide))
 because they require learning about only an isolated portion of the codebase and are a relatively small amount of work.
@@ -123,7 +123,7 @@ GitHub.
 
 Unit tests and Integration tests are an essential part of code contributions.
 
-To mark a Java test as a Java integration test, add the annotation `@Category(IntegrationTest.class)` to the test class definition as well as to its hierarchy of superclasses. Java integration tests can be in the same package as Java unit tests.
+To mark a Java test as a Java integration test, add the annotation `@IntegrationTest` to the test class definition or test method. Make sure the test is a JUnit 5 test. Java integration tests can be in the same package as Java unit tests.
  
 ```java
     @Category(IntegrationTest.class)
@@ -145,8 +145,9 @@ Please refer to section <a href="#building">Build the code and run the tests</a>
 
 Documentation contributions are very welcome!
 
-You can contribute documentation by pull request, as same as code contribution.
-Main directory is ```docs/```, and you can refer to docs/README.md for how to build / test website.
+You can contribute documentation by pull request, using the same process as code contribution.
+Release specific documentation can be found in `docs/` in this repository.
+Documentation not specific to a release, e.g. announcements, is found in the [storm-site](https://github.com/apache/storm-site) repository. If you'd like to build or test the website, refer to the README.md in the storm-site repository.
 
 <a name="pull-requests"></a>
 
@@ -193,11 +194,17 @@ _This section applies to committers only._
 **Important: A pull request must first be properly approved before you are allowed to merge it.**
 
 Committers that are integrating patches or pull requests should use the official Apache repository at
-[https://git-wip-us.apache.org/repos/asf/storm.git](https://git-wip-us.apache.org/repos/asf/storm.git).
+[https://gitbox.apache.org/repos/asf/storm.git](https://gitbox.apache.org/repos/asf/storm.git).
+
+#### Via Github
+
+You can use the [Gitbox account linking utility](https://gitbox.apache.org/setup/) to link your Apache and Github accounts. This will allow you to merge pull requests using Github's UI. 
+
+#### Via your terminal
 
 To pull in a merge request you should generally follow the command line instructions sent out by GitHub.
 
-1. Go to your local copy of the [Apache git repo](https://git-wip-us.apache.org/repos/asf/storm.git), switch
+1. Go to your local copy of the [Apache git repo](https://gitbox.apache.org/repos/asf/storm.git), switch
    to the `master` branch, and make sure it is up to date.
 
         $ git checkout master
@@ -214,14 +221,9 @@ To pull in a merge request you should generally follow the command line instruct
         $ git pull <remote_repo_url> <remote_branch>
     You can use `./dev-tools/storm-merge.py <pull-number>` to produce the above command most of the time.
 
-4.  Assuming that the pull request merges without any conflicts:
-    Update the top-level `CHANGELOG.md`, and add in the JIRA ticket number (example: `STORM-1234`) and ticket
-    description to the change log.  Make sure that you place the JIRA ticket number in the commit comments where
-    applicable.
+4. Run any sanity tests that you think are needed.
 
-5. Run any sanity tests that you think are needed.
-
-6. Once you are confident that everything is ok, you can merge your local test branch into your local `master` branch,
+5. Once you are confident that everything is ok, you can merge your local test branch into your local `master` branch,
    and push the changes back to the official Apache repo.
 
         # Pull request looks ok, change log was updated, etc.  We are ready for pushing.
@@ -233,7 +235,7 @@ To pull in a merge request you should generally follow the command line instruct
         # automatically a short while after you have pushed to the Apache repo.
         $ git push origin master
 
-7. The last step is updating the corresponding JIRA ticket.  [Go to JIRA](https://issues.apache.org/jira/browse/STORM)
+6. The last step is updating the corresponding JIRA ticket.  [Go to JIRA](https://issues.apache.org/jira/browse/STORM)
    and resolve the ticket.  Be sure to set the `Fix Version/s` field to the version you pushed your changes to.
    It is usually good practice to thank the author of the pull request for their contribution if you have not done
    so already.
@@ -244,22 +246,26 @@ To pull in a merge request you should generally follow the command line instruct
 # Build the code and run the tests
 
 ## Prerequisites
-Firt of all you need to make sure you are using maven 3.2.5 or below.  There is a bug in later versions of maven as linked to from https://issues.apache.org/jira/browse/MSHADE-206 that
-cause shaded dependencies to not be packaged correctly.  Also please be aware that because we are shading dependencies mvn dependency:tree will not always show the dependencies correctly. 
 
-In order to build `storm` you need `python`, `ruby` and `nodejs`. In order to avoid an overful page we don't provide platform/OS specific installation instructions for those here. Please refer to you platform's/OS' documentation for support.
+In order to build `storm` you need `python`, `ruby` and `nodejs`. In order to avoid an overfull page we don't provide platform/OS specific installation instructions for those here. Please refer to you platform's/OS' documentation for support.
 
 The `ruby` package manager `rvm` and `nodejs` package manager `nvm` are for convenience and are used in the tests which run on [travis](https://travis-ci.org/apache/storm). They can be installed using `curl -L https://get.rvm.io | bash -s stable --autolibs=enabled && source ~/.profile` (see the [rvm installation instructions](https://github.com/rvm/rvm) for details) and `wget -qO- https://raw.githubusercontent.com/creationix/nvm/v0.26.1/install.sh | bash && source ~/.bashrc` (see the [nvm installation instructions](https://github.com/creationix/nvm) for details).
 
 With `rvm` and `nvm` installed you can run
 
 ```sh
-rvm use 2.1.5 --install
-nvm install 0.12.2
-nvm use 0.12.2
+rvm use 2.4.2 --install
+nvm install 8.9.3
+nvm use 8.9.3
 ```
 
 in order to get started as fast as possible. Users can still install a specific version of `ruby` and/or `node` manually.
+
+You will also need the [mock](https://docs.python.org/3/library/unittest.mock.html) Python testing library (as well as [Python 2.7.x and Python 3.x](https://github.com/pyenv/pyenv)). With [pip](https://pip.pypa.io/en/stable/installing/) installed you can run
+
+```
+pip install mock
+```
 
 ## Building
 
@@ -268,6 +274,8 @@ The following commands must be run from the top-level directory.
 `mvn clean install`
 
 If you wish to skip the unit tests you can do this by adding `-DskipTests` to the command line. 
+
+If you wish to skip the examples and external modules, you can do this by adding `-P '!examples,!externals'` to the command line.
 
 In case you modified `storm.thrift`, you have to regenerate thrift code as java and python code before compiling whole project.
 
@@ -288,34 +296,40 @@ Integration tests require that you activate the profile `integration-test` and t
  
 To run all Java and Clojure integration tests but no unit tests execute one of the commands
  
-    mvn -P  integration-tests-only verify
-    mvn -P  integration-tests-only integration-test
+    mvn -P integration-tests-only,examples,externals verify
+    mvn -P integration-tests-only,examples,externals integration-test
 
 To run all unit tests plus Clojure integration tests but no Java integration tests execute the command
  
-    mvn -P all-tests test
+    mvn -P all-tests,examples,externals test
 
 To run all unit tests and all integration tests execute one of the commands
  
-    mvn -P all-tests verify
-    mvn -P all-tests integration-test
+    mvn -P all-tests,examples,externals verify
+    mvn -P all-tests,examples,externals integration-test
  
  
-You can also run tests selectively via the Clojure REPL.  The following example runs the tests in
-[auth_test.clj](storm-core/test/clj/org/apache/storm/security/auth/auth_test.clj), which has the namespace
-`org.apache.storm.security.auth.auth-test`.
-
 You can also run tests selectively with `-Dtest=<test_name>`.  This works for both clojure and junit tests.
-
-> Tip: IDEs such as IntelliJ IDEA support a built-in Clojure REPL, which you can also use to run tests selectively.
-> Sometimes you may find that tests pass/fail depending on which REPL you use, which -- although frustrating --
-> can be helpful to narrow down errors.
 
 Unfortunately you might experience failures in clojure tests which are wrapped in the `maven-clojure-plugin` and thus doesn't provide too much useful output at first sight - you might end up with a maven test failure with an error message as unhelpful as `Clojure failed.`. In this case it's recommended to look into `target/test-reports` of the failed project to see what actual tests have failed or scroll through the maven output looking for obvious issues like missing binaries.
 
-By default integration tests are not run in the test phase. To run Java and Clojure integration tests you must enable the profile
+By default integration tests are not run in the test phase. To run Java and Clojure integration tests you must enable the profile `integration-tests-only`, or `all-tests`.
  
+## Listing dependency licenses
 
+You can generate a list of dependencies and their licenses by running `mvn license:aggregate-add-third-party@generate-and-check-licenses -Dlicense.skipAggregateAddThirdParty=false` in the project root.
+The list will be put in DEPENDENCY_LICENSES.
+
+The license aggregation plugin will use the license listed in a dependency's POM. If the license is missing, or incomplete (e.g. due to multiple licenses), you can override the license by describing the dependency in the THIRD-PARTY.properties file in the project root.
+
+## Auditing licenses for LICENSE/NOTICE
+The LICENSE and NOTICE files contain licenses and notices for source distribution content. The LICENSE-binary and NOTICE-binary apply to the binary distributions.
+
+When auditing the binary LICENSE-binary and NOTICE-binary, there are a couple of helper scripts available in dev-tools. `collect_license_files` can create an aggregate NOTICE from the libraries in an extracted distribution. The aggregate NOTICE should be adjusted to remove Storm notices and duplicates, and added to the NOTICE-binary.
+
+The `dev-tools/validate-license-files.py` script will check that LICENSE-binary and DEPENDENCY_LICENSES are up to date. Regenerating DEPENDENCY_LICENSES simply requires rerunning the license plugin (see above). LICENSE-binary must be updated manually. The script will check that the dependencies included in a storm-dist/binary build are present in LICENSE-binary, and that no other dependencies are listed. Any additional or missing dependencies are printed to console, and can be added to LICENSE-binary manually. There will likely be an entry for them in `DEPENDENCY_LICENSES` that can be copy-pasted to LICENSE-binary.
+
+You can download the dependency licenses by running `mvn package -Dlicense.skipAggregateDownloadLicenses=false -DskipTests` in the project root. This will put the licenses in target/generated-resources. Keep an eye on the Maven output, as some dependencies may not have licenses configured correctly. These will have to be downloaded manually.
 
 <a name="packaging"></a>
 
@@ -394,7 +408,7 @@ The source code of Storm is managed via [git](http://git-scm.com/).  For a numbe
 repository associated with Storm.
 
 * **Committers only:**
-  [https://git-wip-us.apache.org/repos/asf/storm.git](https://git-wip-us.apache.org/repos/asf/storm.git)
+  [https://gitbox.apache.org/repos/asf/storm.git](https://gitbox.apache.org/repos/asf/storm.git)
   is the official and authoritative git repository for Storm, managed under the umbrella of the Apache Software
   Foundation.  Only official Storm committers will interact with this repository.
   When you push the first time to this repository git will prompt you for your username and password.  Use your Apache
@@ -407,7 +421,7 @@ repository associated with Storm.
 
 An automated bot (called _[ASF GitHub Bot](https://issues.apache.org/jira/secure/ViewProfile.jspa?name=githubbot)_ in
 [Storm JIRA](https://issues.apache.org/jira/browse/STORM)) runs periodically to merge changes in the
-[official Apache repo](https://git-wip-us.apache.org/repos/asf/storm.git) to the read-only
+[official Apache repo](https://gitbox.apache.org/repos/asf/storm.git) to the read-only
 [GitHub mirror repository](https://github.com/apache/storm/), and to merge comments in GitHub pull requests to
 the [Storm JIRA](https://issues.apache.org/jira/browse/STORM).
 

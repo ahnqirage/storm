@@ -27,33 +27,33 @@ public class KafkaSpoutMessageId implements Serializable {
     private final long offset;
     private int numFails = 0;
     /**
-     * true if the record was emitted using a form of collector.emit(...). false
+     * false if the record was emitted using a form of collector.emit(...). true
      * when skipping null tuples as configured by the user in KafkaSpoutConfig
      */
-    private boolean emitted;   
+    private boolean nullTuple;
 
     public KafkaSpoutMessageId(ConsumerRecord<?, ?> consumerRecord) {
-        this(consumerRecord, true);
+        this(consumerRecord, false);
     }
 
-    public KafkaSpoutMessageId(ConsumerRecord<?, ?> consumerRecord, boolean emitted) {
-        this(new TopicPartition(consumerRecord.topic(), consumerRecord.partition()), consumerRecord.offset(), emitted);
+    public KafkaSpoutMessageId(ConsumerRecord<?, ?> consumerRecord, boolean nullTuple) {
+        this(new TopicPartition(consumerRecord.topic(), consumerRecord.partition()), consumerRecord.offset(), nullTuple);
     }
 
     public KafkaSpoutMessageId(TopicPartition topicPart, long offset) {
-        this(topicPart, offset, true);
+        this(topicPart, offset, false);
     }
 
     /**
      * Creates a new KafkaSpoutMessageId.
      * @param topicPart The topic partition this message belongs to
      * @param offset The offset of this message
-     * @param emitted True iff this message is not being skipped as a null tuple
+     * @param nullTuple True if this message is being skipped as a null tuple
      */
-    public KafkaSpoutMessageId(TopicPartition topicPart, long offset, boolean emitted) {
+    public KafkaSpoutMessageId(TopicPartition topicPart, long offset, boolean nullTuple) {
         this.topicPart = topicPart;
         this.offset = offset;
-        this.emitted = emitted;
+        this.nullTuple = nullTuple;
     }
 
     public int partition() {
@@ -80,35 +80,22 @@ public class KafkaSpoutMessageId implements Serializable {
         return topicPart;
     }
 
-    public boolean isEmitted() {
-        return emitted;
+    public boolean isNullTuple() {
+        return nullTuple;
     }
 
-    public void setEmitted(boolean emitted) {
-        this.emitted = emitted;
-    }
-
-    /**
-     * Gets metadata for this message which may be committed to Kafka.
-     * @param currThread The calling thread
-     * @return The metadata
-     */
-    public String getMetadata(Thread currThread) {
-        return "{"
-                + "topic-partition=" + topicPart
-                + ", offset=" + offset
-                + ", numFails=" + numFails
-                + ", thread='" + currThread.getName() + "'"
-                + '}';
+    public void setNullTuple(boolean nullTuple) {
+        this.nullTuple = nullTuple;
     }
 
     @Override
     public String toString() {
         return "{"
-                + "topic-partition=" + topicPart
-                + ", offset=" + offset
-                + ", numFails=" + numFails
-                + '}';
+            + "topic-partition=" + topicPart
+            + ", offset=" + offset
+            + ", numFails=" + numFails
+            + ", nullTuple=" + nullTuple
+            + '}';
     }
 
     @Override

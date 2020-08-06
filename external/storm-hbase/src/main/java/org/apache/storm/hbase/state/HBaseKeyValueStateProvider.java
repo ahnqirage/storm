@@ -21,9 +21,12 @@ package org.apache.storm.hbase.state;
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.PropertyAccessor;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseConfiguration;
-import org.apache.hadoop.hbase.procedure2.util.StringUtils;
 import org.apache.storm.Config;
 import org.apache.storm.hbase.common.HBaseClient;
 import org.apache.storm.state.DefaultStateSerializer;
@@ -34,10 +37,6 @@ import org.apache.storm.task.TopologyContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
-
 /**
  * Provides {@link HBaseKeyValueState}.
  */
@@ -45,9 +44,9 @@ public class HBaseKeyValueStateProvider implements StateProvider {
     private static final Logger LOG = LoggerFactory.getLogger(HBaseKeyValueStateProvider.class);
 
     @Override
-    public State newState(String namespace, Map stormConf, TopologyContext context) {
+    public State newState(String namespace, Map<String, Object> stormConf, TopologyContext context) {
         try {
-            return getHBaseKeyValueState(namespace, stormConf, getStateConfig(stormConf));
+            return getHBaseKeyValueState(namespace, stormConf, context, getStateConfig(stormConf));
         } catch (Exception ex) {
             LOG.error("Error loading config from storm conf {}", stormConf);
             throw new RuntimeException(ex);
@@ -55,12 +54,12 @@ public class HBaseKeyValueStateProvider implements StateProvider {
     }
 
     StateConfig getStateConfig(Map stormConf) throws Exception {
-        StateConfig stateConfig = null;
-        String providerConfig = null;
+        StateConfig stateConfig;
+        String providerConfig;
         ObjectMapper mapper = new ObjectMapper();
         mapper.setVisibility(PropertyAccessor.FIELD, JsonAutoDetect.Visibility.ANY);
-        if (stormConf.containsKey(org.apache.storm.Config.TOPOLOGY_STATE_PROVIDER_CONFIG)) {
-            providerConfig = (String) stormConf.get(org.apache.storm.Config.TOPOLOGY_STATE_PROVIDER_CONFIG);
+        if (stormConf.containsKey(Config.TOPOLOGY_STATE_PROVIDER_CONFIG)) {
+            providerConfig = (String) stormConf.get(Config.TOPOLOGY_STATE_PROVIDER_CONFIG);
             stateConfig = mapper.readValue(providerConfig, StateConfig.class);
         } else {
             stateConfig = new StateConfig();
@@ -74,23 +73,24 @@ public class HBaseKeyValueStateProvider implements StateProvider {
         return stateConfig;
     }
 
-    private HBaseKeyValueState getHBaseKeyValueState(String namespace, Map stormConf, StateConfig config) throws Exception {
+    private HBaseKeyValueState getHBaseKeyValueState(String namespace, Map<String, Object> stormConf, TopologyContext context,
+                                                     StateConfig config) throws Exception {
         Map<String, Object> conf = getHBaseConfigMap(stormConf, config.hbaseConfigKey);
         final Configuration hbConfig = getHBaseConfigurationInstance(conf);
 
         //heck for backward compatibility, we need to pass TOPOLOGY_AUTO_CREDENTIALS to hbase conf
         //the conf instance is instance of persistentMap so making a copy.
-        Map<String, Object> hbaseConfMap = new HashMap<String, Object>(conf);
+        Map<String, Object> hbaseConfMap = new HashMap<>(conf);
         hbaseConfMap.put(Config.TOPOLOGY_AUTO_CREDENTIALS, stormConf.get(Config.TOPOLOGY_AUTO_CREDENTIALS));
         HBaseClient hbaseClient = new HBaseClient(hbaseConfMap, hbConfig, config.tableName);
 
         return new HBaseKeyValueState(hbaseClient, config.columnFamily, namespace,
-                getKeySerializer(config), getValueSerializer(config));
+                                      getKeySerializer(stormConf, context, config), getValueSerializer(stormConf, context, config));
     }
 
     private Configuration getHBaseConfigurationInstance(Map<String, Object> conf) {
         final Configuration hbConfig = HBaseConfiguration.create();
-        for(String key : conf.keySet()) {
+        for (String key : conf.keySet()) {
             hbConfig.set(key, String.valueOf(conf.get(key)));
         }
         return hbConfig;
@@ -98,11 +98,11 @@ public class HBaseKeyValueStateProvider implements StateProvider {
 
     private Map<String, Object> getHBaseConfigMap(Map<String, Object> stormConfMap, String hbaseConfigKey) {
         Map<String, Object> conf = (Map<String, Object>) stormConfMap.get(hbaseConfigKey);
-        if(conf == null) {
+        if (conf == null) {
             throw new IllegalArgumentException("HBase configuration not found using key '" + hbaseConfigKey + "'");
         }
 
-        if(conf.get("hbase.rootdir") == null) {
+        if (conf.get("hbase.rootdir") == null) {
             LOG.warn("No 'hbase.rootdir' value found in configuration! Using HBase defaults.");
         }
         return conf;
@@ -114,28 +114,28 @@ public class HBaseKeyValueStateProvider implements StateProvider {
         }
     }
 
-    private Serializer getKeySerializer(StateConfig config) throws Exception {
-        Serializer serializer = null;
+    private Serializer getKeySerializer(Map<String, Object> topoConf, TopologyContext context, StateConfig config) throws Exception {
+        Serializer serializer;
         if (config.keySerializerClass != null) {
-            Class<?> klass = (Class<?>) Class.forName(config.keySerializerClass);
+            Class<?> klass = Class.forName(config.keySerializerClass);
             serializer = (Serializer) klass.newInstance();
         } else if (config.keyClass != null) {
-            serializer = new DefaultStateSerializer(Collections.singletonList(Class.forName(config.keyClass)));
+            serializer = new DefaultStateSerializer(topoConf, context, Collections.singletonList(Class.forName(config.keyClass)));
         } else {
-            serializer = new DefaultStateSerializer();
+            serializer = new DefaultStateSerializer(topoConf, context);
         }
         return serializer;
     }
 
-    private Serializer getValueSerializer(StateConfig config) throws Exception {
+    private Serializer getValueSerializer(Map<String, Object> topoConf, TopologyContext context, StateConfig config) throws Exception {
         Serializer serializer = null;
         if (config.valueSerializerClass != null) {
             Class<?> klass = (Class<?>) Class.forName(config.valueSerializerClass);
             serializer = (Serializer) klass.newInstance();
         } else if (config.valueClass != null) {
-            serializer = new DefaultStateSerializer(Collections.singletonList(Class.forName(config.valueClass)));
+            serializer = new DefaultStateSerializer(topoConf, context, Collections.singletonList(Class.forName(config.valueClass)));
         } else {
-            serializer = new DefaultStateSerializer();
+            serializer = new DefaultStateSerializer(topoConf, context);
         }
         return serializer;
     }
@@ -151,15 +151,15 @@ public class HBaseKeyValueStateProvider implements StateProvider {
 
         @Override
         public String toString() {
-            return "StateConfig{" +
-                    "keyClass='" + keyClass + '\'' +
-                    ", valueClass='" + valueClass + '\'' +
-                    ", keySerializerClass='" + keySerializerClass + '\'' +
-                    ", valueSerializerClass='" + valueSerializerClass + '\'' +
-                    ", hbaseConfigKey='" + hbaseConfigKey + '\'' +
-                    ", tableName='" + tableName + '\'' +
-                    ", columnFamily='" + columnFamily + '\'' +
-                    '}';
+            return "StateConfig{"
+                    + "keyClass='" + keyClass + '\''
+                    + ", valueClass='" + valueClass + '\''
+                    + ", keySerializerClass='" + keySerializerClass + '\''
+                    + ", valueSerializerClass='" + valueSerializerClass + '\''
+                    + ", hbaseConfigKey='" + hbaseConfigKey + '\''
+                    + ", tableName='" + tableName + '\''
+                    + ", columnFamily='" + columnFamily + '\''
+                    + '}';
         }
     }
 }

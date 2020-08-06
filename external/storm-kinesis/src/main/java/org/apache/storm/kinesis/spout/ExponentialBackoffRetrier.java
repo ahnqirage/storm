@@ -18,15 +18,15 @@
 
 package org.apache.storm.kinesis.spout;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.Serializable;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.SortedSet;
 import java.util.TreeSet;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class ExponentialBackoffRetrier implements FailedMessageRetryHandler, Serializable {
     private static final Logger LOG = LoggerFactory.getLogger(ExponentialBackoffRetrier.class);
@@ -44,29 +44,29 @@ public class ExponentialBackoffRetrier implements FailedMessageRetryHandler, Ser
     private SortedSet<KinesisMessageId> retryMessageSet = new TreeSet<>(new RetryTimeComparator());
 
     /**
-     * no args constructor that uses defaults of 100 ms for first retry, max retries of Long.MAX_VALUE and an exponential backoff of Math.pow(2,i-1) secs for
-     * retry i where i = 2,3,
+     * No args constructor that uses defaults of 100 ms for first retry, max retries of Long.MAX_VALUE and an
+     * exponential backoff of {@code Math.pow(2,i-1)} secs for retry {@code i} where {@code i = 2,3,...}.
      */
-    public ExponentialBackoffRetrier () {
+    public ExponentialBackoffRetrier() {
         this(100L, 2L, Long.MAX_VALUE);
     }
 
     /**
-     *
+     * Creates a new exponential backoff retrier.
      * @param initialDelayMillis delay in milliseconds for first retry
      * @param baseSeconds base for exponent function in seconds
      * @param maxRetries maximum number of retries before the record is discarded/acked
      */
-    public ExponentialBackoffRetrier (Long initialDelayMillis, Long baseSeconds, Long maxRetries) {
+    public ExponentialBackoffRetrier(Long initialDelayMillis, Long baseSeconds, Long maxRetries) {
         this.initialDelayMillis = initialDelayMillis;
         this.baseSeconds = baseSeconds;
         this.maxRetries = maxRetries;
         validate();
     }
 
-    private void validate () {
+    private void validate() {
         if (initialDelayMillis < 0) {
-            throw new IllegalArgumentException("initialDelayMillis cannot be negative." );
+            throw new IllegalArgumentException("initialDelayMillis cannot be negative.");
         }
         if (baseSeconds < 0) {
             throw new IllegalArgumentException("baseSeconds cannot be negative.");
@@ -75,9 +75,10 @@ public class ExponentialBackoffRetrier implements FailedMessageRetryHandler, Ser
             throw new IllegalArgumentException("maxRetries cannot be negative.");
         }
     }
+
     @Override
     public boolean failed(KinesisMessageId messageId) {
-        LOG.debug("Handling failed message " + messageId);
+        LOG.debug("Handling failed message {}", messageId);
         // if maxRetries is 0, dont retry and return false as per interface contract
         if (maxRetries == 0) {
             LOG.warn("maxRetries set to 0. Hence not queueing " + messageId);
@@ -99,14 +100,14 @@ public class ExponentialBackoffRetrier implements FailedMessageRetryHandler, Ser
         // if reached so far, add it to the set of messages waiting to be retried with next retry time based on how many times it failed
         retryTimes.put(messageId, getRetryTime(failCount));
         retryMessageSet.add(messageId);
-        LOG.debug("Scheduled " + messageId + " for retry at " + retryTimes.get(messageId) + " and retry attempt " + failCount);
+        LOG.debug("Scheduled {} for retry at {} and retry attempt {}", messageId, retryTimes.get(messageId), failCount);
         return true;
     }
 
     @Override
     public void acked(KinesisMessageId messageId) {
         // message was acked after being retried. so clear the state for that message
-        LOG.debug("Ack received for " + messageId + ". Hence cleaning state.");
+        LOG.debug("Ack received for {}. Hence cleaning state.", messageId);
         failCounts.remove(messageId);
     }
 
@@ -114,27 +115,31 @@ public class ExponentialBackoffRetrier implements FailedMessageRetryHandler, Ser
     public KinesisMessageId getNextFailedMessageToRetry() {
         KinesisMessageId result = null;
         // return the first message to be retried from the set. It will return the message with the earliest retry time <= current time
-        if (!retryMessageSet.isEmpty() ) {
+        if (!retryMessageSet.isEmpty()) {
             result = retryMessageSet.first();
             if (!(retryTimes.get(result) <= System.nanoTime())) {
                 result = null;
             }
         }
-        LOG.debug("Returning " + result + " to spout for retrying.");
+        LOG.debug("Returning {} to spout for retrying.", result);
         return result;
     }
 
     @Override
     public void failedMessageEmitted(KinesisMessageId messageId) {
-        // spout notified that message returned by us for retrying was actually emitted. hence remove it from set and wait for its ack or fail
+        // spout notified that message returned by us for retrying was actually emitted. hence remove it from set and
+        // wait for its ack or fail
         // but still keep it in counts map to retry again on failure or remove on ack
-        LOG.debug("Spout says " + messageId + " emitted. Hence removing it from queue and wait for its ack or fail");
+        LOG.debug("Spout says {} emitted. Hence removing it from queue and wait for its ack or fail", messageId);
         retryMessageSet.remove(messageId);
         retryTimes.remove(messageId);
     }
 
-    // private helper method to get next retry time for retry attempt i (handles long overflow as well by capping it to Long.MAX_VALUE)
-    private Long getRetryTime (Long retryNum) {
+    /**
+     * private helper method to get next retry time for retry attempt i (handles long overflow as well by capping it to
+     * Long.MAX_VALUE).
+     */
+    private Long getRetryTime(Long retryNum) {
         Long retryTime = System.nanoTime();
         Long nanoMultiplierForMillis = 1000000L;
         // if first retry then retry time  = current time  + initial delay

@@ -16,12 +16,18 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+
 package org.apache.storm.nimbus;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
+import java.util.UUID;
 import org.apache.storm.Config;
 import org.apache.storm.ILocalCluster;
 import org.apache.storm.ISubmitterHook;
-import org.apache.storm.Testing;
+import org.apache.storm.LocalCluster;
 import org.apache.storm.generated.StormTopology;
 import org.apache.storm.generated.TopologyInfo;
 import org.apache.storm.testing.TestGlobalCount;
@@ -32,43 +38,10 @@ import org.apache.storm.utils.Utils;
 import org.junit.Assert;
 import org.junit.Test;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Random;
-import java.util.UUID;
-
 /**
  * Tests local cluster with nimbus and a plugin for {@link Config#STORM_TOPOLOGY_SUBMISSION_NOTIFIER_PLUGIN}.
  */
 public class LocalNimbusTest {
-
-    @Test
-    public void testSubmitTopologyToLocalNimbus() throws Exception {
-
-        HashMap<String,Object> localClusterConf = new HashMap<>();
-        localClusterConf.put("nimbus-daemon", true);
-        ILocalCluster localCluster = Testing.getLocalCluster(localClusterConf);
-
-        Config topoConf = new Config();
-        topoConf.putAll(Utils.readDefaultConfig());
-        topoConf.setDebug(true);
-        topoConf.put("storm.cluster.mode", "local"); // default is aways "distributed" but here local cluster is being used.
-        topoConf.put(Config.STORM_TOPOLOGY_SUBMISSION_NOTIFIER_PLUGIN, InmemoryTopologySubmitterHook.class.getName());
-
-        List<TopologyDetails> topologyNames =new ArrayList<>();
-        for (int i=0; i<4; i++) {
-            final String topologyName = "word-count-"+ UUID.randomUUID().toString();
-            final StormTopology stormTopology = createTestTopology();
-            topologyNames.add(new TopologyDetails(topologyName, stormTopology));
-            localCluster.submitTopology(topologyName, topoConf, stormTopology);
-        }
-
-        Assert.assertEquals(InmemoryTopologySubmitterHook.submittedTopologies, topologyNames);
-
-        localCluster.shutdown();
-    }
 
     public static StormTopology createTestTopology() {
         TopologyBuilder builder = new TopologyBuilder();
@@ -80,7 +53,33 @@ public class LocalNimbusTest {
     }
 
     private static int generateParallelismHint() {
-        return new Random().nextInt(9)+1;
+        return new Random().nextInt(9) + 1;
+    }
+
+    @Test
+    public void testSubmitTopologyToLocalNimbus() throws Exception {
+        int port = Utils.getAvailablePort();
+        try (ILocalCluster localCluster = new LocalCluster.Builder()
+            .withNimbusDaemon(true)
+            .withDaemonConf(Config.NIMBUS_THRIFT_PORT, port)
+            .build()) {
+            Config topoConf = new Config();
+            topoConf.putAll(Utils.readDefaultConfig());
+            topoConf.setDebug(true);
+            topoConf.put("storm.cluster.mode", "local"); // default is aways "distributed" but here local cluster is being used.
+            topoConf.put(Config.STORM_TOPOLOGY_SUBMISSION_NOTIFIER_PLUGIN, InmemoryTopologySubmitterHook.class.getName());
+            topoConf.put(Config.NIMBUS_THRIFT_PORT, port);
+
+            List<TopologyDetails> topologyNames = new ArrayList<>();
+            for (int i = 0; i < 4; i++) {
+                final String topologyName = "word-count-" + UUID.randomUUID().toString();
+                final StormTopology stormTopology = createTestTopology();
+                topologyNames.add(new TopologyDetails(topologyName, stormTopology));
+                localCluster.submitTopology(topologyName, topoConf, stormTopology);
+            }
+
+            Assert.assertEquals(InmemoryTopologySubmitterHook.submittedTopologies, topologyNames);
+        }
     }
 
     public static class InmemoryTopologySubmitterHook implements ISubmitterHook {
@@ -108,8 +107,9 @@ public class LocalNimbusTest {
 
             TopologyDetails that = (TopologyDetails) o;
 
-            if (topologyName != null ? !topologyName.equals(that.topologyName) : that.topologyName != null)
+            if (topologyName != null ? !topologyName.equals(that.topologyName) : that.topologyName != null) {
                 return false;
+            }
             return !(stormTopology != null ? !stormTopology.equals(that.stormTopology) : that.stormTopology != null);
 
         }
@@ -124,9 +124,9 @@ public class LocalNimbusTest {
         @Override
         public String toString() {
             return "TopologyDetails{" +
-                    "topologyName='" + topologyName + '\'' +
-                    ", stormTopology=" + stormTopology +
-                    '}';
+                   "topologyName='" + topologyName + '\'' +
+                   ", stormTopology=" + stormTopology +
+                   '}';
         }
     }
 }

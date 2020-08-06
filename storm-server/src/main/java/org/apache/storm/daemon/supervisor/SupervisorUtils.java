@@ -15,32 +15,32 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.storm.daemon.supervisor;
 
-import org.apache.storm.Config;
-import org.apache.storm.generated.LSWorkerHeartbeat;
-import org.apache.storm.generated.LocalAssignment;
-import org.apache.storm.localizer.LocalResource;
-import org.apache.storm.localizer.Localizer;
-import org.apache.storm.utils.ConfigUtils;
-import org.apache.storm.utils.ServerUtils;
-import org.apache.storm.utils.Utils;
-import org.apache.storm.utils.ObjectReader;
-import org.apache.storm.utils.LocalState;
-import org.apache.zookeeper.ZooDefs;
-import org.apache.zookeeper.data.ACL;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import static org.apache.storm.ServerConstants.NUMA_PORTS;
 
 import java.io.IOException;
-import java.net.URLDecoder;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+
+import org.apache.storm.DaemonConfig;
+import org.apache.storm.generated.LSWorkerHeartbeat;
+import org.apache.storm.localizer.LocalResource;
+import org.apache.storm.utils.ConfigUtils;
+import org.apache.storm.utils.LocalState;
+import org.apache.storm.utils.ObjectReader;
+import org.apache.storm.utils.ServerUtils;
+import org.apache.storm.utils.Utils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 
 public class SupervisorUtils {
 
@@ -48,11 +48,58 @@ public class SupervisorUtils {
 
     private static final SupervisorUtils INSTANCE = new SupervisorUtils();
     private static SupervisorUtils _instance = INSTANCE;
+
     public static void setInstance(SupervisorUtils u) {
         _instance = u;
     }
+
     public static void resetInstance() {
         _instance = INSTANCE;
+    }
+
+    /**
+     * getNumaIdForPort for a specific supervisor.
+     * @param port port
+     * @param supervisorConf supervisorConf
+     * @return getNumaIdForPort
+     */
+    public static String getNumaIdForPort(Integer port, Map<String, Object> supervisorConf) {
+        Map<String, Object> validatedNumaMap = getNumaMap(supervisorConf);
+        for (Map.Entry<String, Object> numaEntry : validatedNumaMap.entrySet()) {
+            Map<String, Object> numaMap  = (Map<String, Object>) numaEntry.getValue();
+            List<Integer> portList = (List<Integer>) numaMap.get(NUMA_PORTS);
+            if (portList.contains(port)) {
+                return numaEntry.getKey();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * gets the set of all configured numa ports for a specific supervisor.
+     * @param supervisorConf supervisorConf
+     * @return set of all numa ports
+     */
+    public static Set<Integer> getNumaPorts(Map<String, Object> supervisorConf) {
+        Set<Integer> numaPorts = new HashSet<>();
+        Map<String, Object> validatedNumaMap = getNumaMap(supervisorConf);
+        for (Map.Entry<String, Object> numaEntry : validatedNumaMap.entrySet()) {
+            Map<String, Object> numaMap  = (Map<String, Object>) numaEntry.getValue();
+            List<Integer> portList = (List<Integer>) numaMap.get(NUMA_PORTS);
+            numaPorts.addAll(portList);
+        }
+        return numaPorts;
+    }
+
+    public static List<Integer> getSlotsPorts(Map<String, Object> supervisorConf) {
+        List<Integer> slotsPorts = (List<Integer>) supervisorConf.getOrDefault(DaemonConfig.SUPERVISOR_SLOTS_PORTS,
+                new ArrayList<>());
+        // It's possible we have numaPorts specified that weren't configured in SUPERVISOR_SLOTS_PORTS.  Make
+        // sure we handle these ports as well.
+        Set<Integer> numaPorts = SupervisorUtils.getNumaPorts(supervisorConf);
+        numaPorts.removeAll(slotsPorts);
+        slotsPorts.addAll(numaPorts);
+        return slotsPorts;
     }
 
     public static void rmrAsUser(Map<String, Object> conf, String id, String path) throws IOException {
@@ -68,59 +115,38 @@ public class SupervisorUtils {
     }
 
     /**
-     * Given the blob information returns the value of the uncompress field, handling it either being a string or a boolean value, or if it's not specified then
-     * returns false
-     * 
-     * @param blobInfo
-     * @return
+     * Given the blob information returns the value of the uncompress field, handling it either being a string or a boolean value, or if
+     * it's not specified then returns false.
      */
-    public static Boolean shouldUncompressBlob(Map<String, Object> blobInfo) {
+    public static boolean shouldUncompressBlob(Map<String, Object> blobInfo) {
         return ObjectReader.getBoolean(blobInfo.get("uncompress"), false);
     }
 
     /**
-     * Returns a list of LocalResources based on the blobstore-map passed in
-     * 
-     * @param blobstoreMap
-     * @return
+     * Given the blob information returns the value of the workerRestart field, handling it either being a string or a boolean value, or if
+     * it's not specified then returns false.
+     *
+     * @param blobInfo the info for the blob.
+     * @return true if the blob needs a worker restart by way of the callback else false.
+     */
+    public static boolean blobNeedsWorkerRestart(Map<String, Object> blobInfo) {
+        return ObjectReader.getBoolean(blobInfo.get("workerRestart"), false);
+    }
+
+    /**
+     * Returns a list of LocalResources based on the blobstore-map passed in.
      */
     public static List<LocalResource> blobstoreMapToLocalresources(Map<String, Map<String, Object>> blobstoreMap) {
         List<LocalResource> localResourceList = new ArrayList<>();
         if (blobstoreMap != null) {
             for (Map.Entry<String, Map<String, Object>> map : blobstoreMap.entrySet()) {
-                LocalResource localResource = new LocalResource(map.getKey(), shouldUncompressBlob(map.getValue()));
+                Map<String, Object> blobConf = map.getValue();
+                LocalResource localResource =
+                    new LocalResource(map.getKey(), shouldUncompressBlob(blobConf), blobNeedsWorkerRestart(blobConf));
                 localResourceList.add(localResource);
             }
         }
         return localResourceList;
-    }
-
-    /**
-     * For each of the downloaded topologies, adds references to the blobs that the topologies are using. This is used to reconstruct the
-     * cache on restart.
-     * 
-     * @param localizer
-     * @param stormId
-     * @param conf
-     */
-    static void addBlobReferences(Localizer localizer, String stormId, Map<String, Object> conf, String user) throws IOException {
-        Map<String, Object> topoConf = ConfigUtils.readSupervisorStormConf(conf, stormId);
-        Map<String, Map<String, Object>> blobstoreMap = (Map<String, Map<String, Object>>) topoConf.get(Config.TOPOLOGY_BLOBSTORE_MAP);
-        String topoName = (String) topoConf.get(Config.TOPOLOGY_NAME);
-        List<LocalResource> localresources = SupervisorUtils.blobstoreMapToLocalresources(blobstoreMap);
-        if (blobstoreMap != null) {
-            localizer.addReferences(localresources, user, topoName);
-        }
-    }
-
-    public static Set<String> readDownloadedTopologyIds(Map<String, Object> conf) throws IOException {
-        Set<String> stormIds = new HashSet<>();
-        String path = ConfigUtils.supervisorStormDistRoot(conf);
-        Collection<String> rets = ConfigUtils.readDirContents(path);
-        for (String ret : rets) {
-            stormIds.add(URLDecoder.decode(ret));
-        }
-        return stormIds;
     }
 
     public static Collection<String> supervisorWorkerIds(Map<String, Object> conf) {
@@ -129,17 +155,34 @@ public class SupervisorUtils {
     }
 
     /**
-     * map from worker id to heartbeat
+     * Map from worker id to heartbeat.
      *
-     * @param conf
-     * @return
-     * @throws Exception
      */
-    public static Map<String, LSWorkerHeartbeat> readWorkerHeartbeats(Map<String, Object> conf) throws Exception {
+    public static Map<String, LSWorkerHeartbeat> readWorkerHeartbeats(Map<String, Object> conf) {
         return _instance.readWorkerHeartbeatsImpl(conf);
     }
 
-    public Map<String, LSWorkerHeartbeat> readWorkerHeartbeatsImpl(Map<String, Object> conf) throws Exception {
+    /**
+     * Get worker heartbeat by workerId.
+     */
+    private static LSWorkerHeartbeat readWorkerHeartbeat(Map<String, Object> conf, String workerId) {
+        return _instance.readWorkerHeartbeatImpl(conf, workerId);
+    }
+
+    /**
+     * Return supervisor numa configuration.
+     * @param stormConf stormConf
+     * @return getNumaMap
+     */
+    public static Map<String, Object> getNumaMap(Map<String, Object> stormConf) {
+        Object numa = stormConf.get(DaemonConfig.SUPERVISOR_NUMA_META);
+        if (numa == null) {
+            return Collections.emptyMap();
+        }
+        return (Map<String, Object>) numa;
+    }
+
+    public Map<String, LSWorkerHeartbeat> readWorkerHeartbeatsImpl(Map<String, Object> conf) {
         Map<String, LSWorkerHeartbeat> workerHeartbeats = new HashMap<>();
 
         Collection<String> workerIds = SupervisorUtils.supervisorWorkerIds(conf);
@@ -152,19 +195,6 @@ public class SupervisorUtils {
         return workerHeartbeats;
     }
 
-
-    /**
-     * get worker heartbeat by workerId
-     *
-     * @param conf
-     * @param workerId
-     * @return
-     * @throws IOException
-     */
-    private static LSWorkerHeartbeat readWorkerHeartbeat(Map<String, Object> conf, String workerId) {
-        return _instance.readWorkerHeartbeatImpl(conf, workerId);
-    }
-
     protected LSWorkerHeartbeat readWorkerHeartbeatImpl(Map<String, Object> conf, String workerId) {
         try {
             LocalState localState = ConfigUtils.workerState(conf, workerId);
@@ -173,20 +203,5 @@ public class SupervisorUtils {
             LOG.warn("Failed to read local heartbeat for workerId : {},Ignoring exception.", workerId, e);
             return null;
         }
-    }
-
-    public static boolean  isWorkerHbTimedOut(int now, LSWorkerHeartbeat whb, Map<String, Object> conf) {
-        return _instance.isWorkerHbTimedOutImpl(now, whb, conf);
-    }
-
-    private  boolean  isWorkerHbTimedOutImpl(int now, LSWorkerHeartbeat whb, Map<String, Object> conf) {
-        return (now - whb.get_time_secs()) > ObjectReader.getInt(conf.get(Config.SUPERVISOR_WORKER_TIMEOUT_SECS));
-    }
-
-    static List<ACL> supervisorZkAcls() {
-        final List<ACL> acls = new ArrayList<>();
-        acls.add(ZooDefs.Ids.CREATOR_ALL_ACL.get(0));
-        acls.add(new ACL((ZooDefs.Perms.READ ^ ZooDefs.Perms.CREATE), ZooDefs.Ids.ANYONE_ID_UNSAFE));
-        return acls;
     }
 }

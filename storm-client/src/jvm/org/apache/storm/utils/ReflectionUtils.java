@@ -18,7 +18,9 @@
 
 package org.apache.storm.utils;
 
+import java.util.List;
 import java.util.Map;
+import org.apache.storm.Config;
 
 public class ReflectionUtils {
     // A singleton instance allows us to mock delegated static methods in our
@@ -26,9 +28,9 @@ public class ReflectionUtils {
     private static ReflectionUtils _instance = new ReflectionUtils();
 
     /**
-     * Provide an instance of this class for delegates to use.  To mock out
-     * delegated methods, provide an instance of a subclass that overrides the
-     * implementation of the delegated method.
+     * Provide an instance of this class for delegates to use.  To mock out delegated methods, provide an instance of a subclass that
+     * overrides the implementation of the delegated method.
+     *
      * @param u a Utils instance
      * @return the previously set instance
      */
@@ -41,7 +43,7 @@ public class ReflectionUtils {
     @SuppressWarnings("unchecked")
     public static <T> T newInstance(String klass) {
         try {
-            return newInstance((Class<T>)Class.forName(klass));
+            return newInstance((Class<T>) Class.forName(klass));
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -54,7 +56,7 @@ public class ReflectionUtils {
     @SuppressWarnings("unchecked")
     public static <T> T newInstance(String klass, Map<String, Object> conf) {
         try {
-            return newInstance((Class<T>)Class.forName(klass), conf);
+            return newInstance((Class<T>) Class.forName(klass), conf);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -69,6 +71,15 @@ public class ReflectionUtils {
             }
         } catch (Exception e) {
             throw new RuntimeException(e);
+        }
+    }
+
+    public static <T> T newSchedulerStrategyInstance(String klass, Map<String, Object> conf) {
+        List<String> allowedSchedulerStrategies = (List<String>) conf.get(Config.NIMBUS_SCHEDULER_STRATEGY_CLASS_WHITELIST);
+        if (allowedSchedulerStrategies == null || allowedSchedulerStrategies.contains(klass)) {
+            return newInstance(klass);
+        } else {
+            throw new DisallowedStrategyException(klass, allowedSchedulerStrategies);
         }
     }
 

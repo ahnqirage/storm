@@ -196,8 +196,8 @@ class Bolt(object):
                     sync()
                 else:
                     self.process(tup)
-        except Exception as e:
-            reportError(traceback.format_exc(e))
+        except Exception:
+            reportError(traceback.format_exc())
 
 class BasicBolt(object):
     def initialize(self, stormconf, context):
@@ -222,14 +222,20 @@ class BasicBolt(object):
                     try:
                         self.process(tup)
                         ack(tup)
-                    except Exception as e:
-                        reportError(traceback.format_exc(e))
+                    except Exception:
+                        reportError(traceback.format_exc())
                         fail(tup)
-        except Exception as e:
-            reportError(traceback.format_exc(e))
+        except Exception:
+            reportError(traceback.format_exc())
 
 class Spout(object):
     def initialize(self, conf, context):
+        pass
+
+    def activate(self):
+        pass
+
+    def deactivate(self):
         pass
 
     def ack(self, id):
@@ -249,6 +255,10 @@ class Spout(object):
             self.initialize(conf, context)
             while True:
                 msg = readCommand()
+                if msg["command"] == "activate":
+                    self.activate()
+                if msg["command"] == "deactivate":
+                    self.deactivate()
                 if msg["command"] == "next":
                     self.nextTuple()
                 if msg["command"] == "ack":
@@ -256,5 +266,5 @@ class Spout(object):
                 if msg["command"] == "fail":
                     self.fail(msg["id"])
                 sync()
-        except Exception as e:
-            reportError(traceback.format_exc(e))
+        except Exception:
+            reportError(traceback.format_exc())

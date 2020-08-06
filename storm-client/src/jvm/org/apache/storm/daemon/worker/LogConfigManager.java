@@ -18,23 +18,22 @@
 
 package org.apache.storm.daemon.worker;
 
-import org.apache.logging.log4j.Level;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.core.LoggerContext;
-import org.apache.logging.log4j.core.config.Configuration;
-import org.apache.logging.log4j.core.config.LoggerConfig;
-import org.apache.storm.utils.Time;
-import org.apache.storm.generated.LogConfig;
-import org.apache.storm.generated.LogLevel;
-import org.apache.storm.generated.LogLevelAction;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.util.HashMap;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicReference;
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.LoggerContext;
+import org.apache.logging.log4j.core.config.Configuration;
+import org.apache.logging.log4j.core.config.LoggerConfig;
+import org.apache.storm.generated.LogConfig;
+import org.apache.storm.generated.LogLevel;
+import org.apache.storm.generated.LogLevelAction;
+import org.apache.storm.utils.Time;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class LogConfigManager {
 
@@ -78,10 +77,10 @@ public class LogConfigManager {
             }
 
             // Look for deleted log timeouts
-            TreeMap<String,LogLevel> latestConf = latestLogConfig.get();
+            TreeMap<String, LogLevel> latestConf = latestLogConfig.get();
             if (latestConf != null) {
                 for (String loggerName : latestConf.descendingKeySet()) {
-                    if (! newLogConfigs.containsKey(loggerName)) {
+                    if (!newLogConfigs.containsKey(loggerName)) {
                         // if we had a timeout, but the timeout is no longer active
                         setLoggerLevel(logContext, loggerName, latestConf.get(loggerName).get_reset_log_level());
 
@@ -111,6 +110,9 @@ public class LogConfigManager {
     // also called from processLogConfigChange
     public void resetLogLevels() {
         TreeMap<String, LogLevel> latestLogLevelMap = latestLogConfig.get();
+
+        LOG.debug("Resetting log levels: Latest log config is {}", latestLogLevelMap);
+
         LoggerContext loggerContext = (LoggerContext) LogManager.getContext(false);
 
         for (String loggerName : latestLogLevelMap.descendingKeySet()) {
@@ -120,12 +122,12 @@ public class LogConfigManager {
             if (timeout < Time.currentTimeMillis()) {
                 LOG.info("{}: Resetting level to {}", loggerName, resetLogLevel);
                 setLoggerLevel(loggerContext, loggerName, resetLogLevel);
+                latestLogConfig.getAndUpdate(input -> {
+                    TreeMap<String, LogLevel> result = new TreeMap<>(input);
+                    result.remove(loggerName);
+                    return result;
+                });
             }
-            latestLogConfig.getAndUpdate(input -> {
-                TreeMap<String, LogLevel> result = new TreeMap<>(input);
-                result.remove(loggerName);
-                return result;
-            });
         }
         loggerContext.updateLoggers();
     }

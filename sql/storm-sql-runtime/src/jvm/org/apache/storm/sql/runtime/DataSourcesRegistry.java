@@ -47,34 +47,15 @@ public class DataSourcesRegistry {
     }
 
     /**
-     * Construct a data source.
-     * @param uri data source uri
-     * @param inputFormatClass input format class
-     * @param outputFormatClass output format class
-     * @param fields fields info list
-     * @return DataSource object
-     */
-    public static DataSource construct(
-            URI uri, String inputFormatClass, String outputFormatClass,
-            List<FieldInfo> fields) {
-        DataSourcesProvider provider = providers.get(uri.getScheme());
-        if (provider == null) {
-            return null;
-        }
-
-        return provider.construct(uri, inputFormatClass, outputFormatClass, fields);
-    }
-
-    /**
-     * Construct a trident data source.
+     * Construct a streams data source.
      * @param uri data source uri
      * @param inputFormatClass input format class
      * @param outputFormatClass output format class
      * @param properties Properties
      * @param fields fields info list
-     * @return TridentDataSource object
+     * @return StreamsDataSource object
      */
-    public static ISqlTridentDataSource constructTridentDataSource(
+    public static ISqlStreamsDataSource constructStreamsDataSource(
             URI uri, String inputFormatClass, String outputFormatClass,
             Properties properties, List<FieldInfo> fields) {
         DataSourcesProvider provider = providers.get(uri.getScheme());
@@ -82,7 +63,7 @@ public class DataSourcesRegistry {
             return null;
         }
 
-        return provider.constructTrident(uri, inputFormatClass, outputFormatClass, properties, fields);
+        return provider.constructStreams(uri, inputFormatClass, outputFormatClass, properties, fields);
     }
 
     /**

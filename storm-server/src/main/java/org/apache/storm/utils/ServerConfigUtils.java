@@ -18,10 +18,6 @@
 
 package org.apache.storm.utils;
 
-import org.apache.commons.io.FileUtils;
-import org.apache.storm.Config;
-import org.apache.storm.DaemonConfig;
-
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -31,20 +27,24 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
+import org.apache.commons.io.FileUtils;
+import org.apache.storm.Config;
+import org.apache.storm.DaemonConfig;
+
 
 public class ServerConfigUtils {
     public static final String FILE_SEPARATOR = File.separator;
-    public final static String NIMBUS_DO_NOT_REASSIGN = "NIMBUS-DO-NOT-REASSIGN";
-    public final static String RESOURCES_SUBDIR = "resources";
+    public static final String NIMBUS_DO_NOT_REASSIGN = "NIMBUS-DO-NOT-REASSIGN";
+    public static final String RESOURCES_SUBDIR = "resources";
 
     // A singleton instance allows us to mock delegated static methods in our
     // tests by subclassing.
     private static ServerConfigUtils _instance = new ServerConfigUtils();
 
     /**
-     * Provide an instance of this class for delegates to use.  To mock out
-     * delegated methods, provide an instance of a subclass that overrides the
-     * implementation of the delegated method.
+     * Provide an instance of this class for delegates to use.  To mock out delegated methods, provide an instance of a subclass that
+     * overrides the implementation of the delegated method.
+     *
      * @param u a ServerConfigUtils instance
      * @return the previously set instance
      */
@@ -55,7 +55,7 @@ public class ServerConfigUtils {
     }
 
     public static String masterLocalDir(Map<String, Object> conf) throws IOException {
-        String ret = String.valueOf(conf.get(Config.STORM_LOCAL_DIR)) + FILE_SEPARATOR + "nimbus";
+        String ret = ConfigUtils.absoluteStormLocalDir(conf) + FILE_SEPARATOR + "nimbus";
         FileUtils.forceMkdir(new File(ret));
         return ret;
     }
@@ -81,55 +81,29 @@ public class ServerConfigUtils {
         return ret;
     }
 
+    public static String masterStormDistRoot(Map<String, Object> conf, String stormId) throws IOException {
+        return (masterStormDistRoot(conf) + FILE_SEPARATOR + stormId);
+    }
+
     /* TODO: make sure test these two functions in manual tests */
     public static List<String> getTopoLogsUsers(Map<String, Object> topologyConf) {
-        List<String> logsUsers = (List<String>)topologyConf.get(DaemonConfig.LOGS_USERS);
-        List<String> topologyUsers = (List<String>)topologyConf.get(Config.TOPOLOGY_USERS);
-        Set<String> mergedUsers = new HashSet<String>();
-        if (logsUsers != null) {
-            for (String user : logsUsers) {
-                if (user != null) {
-                    mergedUsers.add(user);
-                }
-            }
-        }
-        if (topologyUsers != null) {
-            for (String user : topologyUsers) {
-                if (user != null) {
-                    mergedUsers.add(user);
-                }
-            }
-        }
-        List<String> ret = new ArrayList<String>(mergedUsers);
+        List<String> logsUsers = ObjectReader.getStrings(topologyConf.get(DaemonConfig.LOGS_USERS));
+        List<String> topologyUsers = ObjectReader.getStrings(topologyConf.get(Config.TOPOLOGY_USERS));
+        Set<String> mergedUsers = new HashSet<>(logsUsers);
+        mergedUsers.addAll(topologyUsers);
+        List<String> ret = new ArrayList<>(mergedUsers);
         Collections.sort(ret);
         return ret;
     }
 
     public static List<String> getTopoLogsGroups(Map<String, Object> topologyConf) {
-        List<String> logsGroups = (List<String>)topologyConf.get(DaemonConfig.LOGS_GROUPS);
-        List<String> topologyGroups = (List<String>)topologyConf.get(Config.TOPOLOGY_GROUPS);
-        Set<String> mergedGroups = new HashSet<String>();
-        if (logsGroups != null) {
-            for (String group : logsGroups) {
-                if (group != null) {
-                    mergedGroups.add(group);
-                }
-            }
-        }
-        if (topologyGroups != null) {
-            for (String group : topologyGroups) {
-                if (group != null) {
-                    mergedGroups.add(group);
-                }
-            }
-        }
-        List<String> ret = new ArrayList<String>(mergedGroups);
+        List<String> logsGroups = ObjectReader.getStrings(topologyConf.get(DaemonConfig.LOGS_GROUPS));
+        List<String> topologyGroups = ObjectReader.getStrings(topologyConf.get(Config.TOPOLOGY_GROUPS));
+        Set<String> mergedGroups = new HashSet<>(logsGroups);
+        mergedGroups.addAll(topologyGroups);
+        List<String> ret = new ArrayList<>(mergedGroups);
         Collections.sort(ret);
         return ret;
-    }
-
-    public static String masterStormDistRoot(Map<String, Object> conf, String stormId) throws IOException {
-        return (masterStormDistRoot(conf) + FILE_SEPARATOR + stormId);
     }
 
     public static String supervisorTmpDir(Map<String, Object> conf) throws IOException {
@@ -148,7 +122,7 @@ public class ServerConfigUtils {
     }
 
     public static String absoluteHealthCheckDir(Map<String, Object> conf) {
-        String stormHome = System.getProperty("storm.home");
+        String stormHome = System.getProperty(ConfigUtils.STORM_HOME);
         String healthCheckDir = (String) conf.get(DaemonConfig.STORM_HEALTH_CHECK_DIR);
         if (healthCheckDir == null) {
             return (stormHome + FILE_SEPARATOR + "healthchecks");
@@ -178,10 +152,10 @@ public class ServerConfigUtils {
     }
 
     public LocalState supervisorStateImpl(Map<String, Object> conf) throws IOException {
-        return new LocalState((ConfigUtils.supervisorLocalDir(conf) + FILE_SEPARATOR + "localstate"));
+        return new LocalState((ConfigUtils.supervisorLocalDir(conf) + FILE_SEPARATOR + "localstate"),  true);
     }
 
     public LocalState nimbusTopoHistoryStateImpl(Map<String, Object> conf) throws IOException {
-        return new LocalState((masterLocalDir(conf) + FILE_SEPARATOR + "history"));
+        return new LocalState((masterLocalDir(conf) + FILE_SEPARATOR + "history"), true);
     }
 }

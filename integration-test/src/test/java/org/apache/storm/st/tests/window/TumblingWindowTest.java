@@ -29,8 +29,9 @@ import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 public final class TumblingWindowTest extends AbstractTest {
-    private static Logger log = LoggerFactory.getLogger(TumblingWindowTest.class);
-    TopoWrap topo;
+    private static final Logger LOG = LoggerFactory.getLogger(TumblingWindowTest.class);
+    private final WindowVerifier windowVerifier = new WindowVerifier();
+    private TopoWrap topo;
 
     @DataProvider
     public static Object[][] generateWindows() {
@@ -48,7 +49,7 @@ public final class TumblingWindowTest extends AbstractTest {
     @Test(dataProvider = "generateWindows")
     public void testTumbleCount(int tumbleSize) throws Exception {
         final TumblingWindowCorrectness testable = new TumblingWindowCorrectness(tumbleSize);
-        final String topologyName = this.getClass().getSimpleName() + "t" + tumbleSize;
+        final String topologyName = this.getClass().getSimpleName() + "-size" + tumbleSize;
         if (tumbleSize <= 0) {
             try {
                 testable.newTopology();
@@ -58,7 +59,7 @@ public final class TumblingWindowTest extends AbstractTest {
             }
         }
         topo = new TopoWrap(cluster, topologyName, testable.newTopology());
-        SlidingWindowTest.runAndVerifyCount(tumbleSize, tumbleSize, testable, topo);
+        windowVerifier.runAndVerifyCount(tumbleSize, tumbleSize, testable, topo);
     }
 
     @DataProvider
@@ -77,7 +78,7 @@ public final class TumblingWindowTest extends AbstractTest {
     @Test(dataProvider = "generateTumbleTimes")
     public void testTumbleTime(int tumbleSec) throws Exception {
         final TumblingTimeCorrectness testable = new TumblingTimeCorrectness(tumbleSec);
-        final String topologyName = this.getClass().getSimpleName() + "t" + tumbleSec;
+        final String topologyName = this.getClass().getSimpleName() + "-sec" + tumbleSec;
         if (tumbleSec <= 0) {
             try {
                 testable.newTopology();
@@ -87,13 +88,14 @@ public final class TumblingWindowTest extends AbstractTest {
             }
         }
         topo = new TopoWrap(cluster, topologyName, testable.newTopology());
-        SlidingWindowTest.runAndVerifyTime(tumbleSec, tumbleSec, testable, topo);
+        windowVerifier.runAndVerifyTime(tumbleSec, tumbleSec, testable, topo);
     }
 
     @AfterMethod
     public void cleanup() throws Exception {
         if (topo != null) {
-            topo.killQuietly();
+            topo.killOrThrow();
+            topo = null;
         }
     }
 }

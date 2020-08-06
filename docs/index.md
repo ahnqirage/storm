@@ -6,6 +6,7 @@ documentation: true
 ### Basics of Storm
 
 * [Javadoc](javadocs/index.html)
+* [Tutorial](Tutorial.html)
 * [Concepts](Concepts.html)
 * [Scheduler](Storm-Scheduler.html)
 * [Configuration](Configuration.html)
@@ -64,7 +65,8 @@ But small change will not affect the user experience. We will notify the user wh
 * [CGroup Enforcement](cgroups_in_storm.html)
 * [Pacemaker reduces load on zookeeper for large clusters](Pacemaker.html)
 * [Resource Aware Scheduler](Resource_Aware_Scheduler_overview.html)
-* [Daemon Metrics/Monitoring](storm-metrics-profiling-internal-actions.html)
+* [Generic Resources](Generic-resources.html)
+* [Daemon Metrics/Monitoring](ClusterMetrics.html)
 * [Windows users guide](windows-users-guide.html)
 * [Classpath handling](Classpath-handling.html)
 
@@ -75,13 +77,13 @@ But small change will not affect the user experience. We will notify the user wh
 * [DSLs and multilang adapters](DSLs-and-multilang-adapters.html)
 * [Using non-JVM languages with Storm](Using-non-JVM-languages-with-Storm.html)
 * [Distributed RPC](Distributed-RPC.html)
-* [Transactional topologies](Transactional-topologies.html)
 * [Hooks](Hooks.html)
-* [Metrics](Metrics.html)
+* [Metrics (Deprecated)](Metrics.html)
+* [Metrics V2](metrics_v2.html)
 * [State Checkpointing](State-checkpointing.html)
 * [Windowing](Windowing.html)
 * [Joining Streams](Joins.html)
-* [Blobstore(Distcahce)](distcache-blobstore.html)
+* [Blobstore(Distcache)](distcache-blobstore.html)
 
 ### Debugging
 * [Dynamic Log Level Settings](dynamic-log-level-settings.html)
@@ -90,7 +92,7 @@ But small change will not affect the user experience. We will notify the user wh
 * [Event Logging](Eventlogging.html)
 
 ### Integration With External Systems, and Other Libraries
-* [Apache Kafka Integration](storm-kafka.html), [New Kafka Consumer Integration](storm-kafka-client.html)
+* [Apache Kafka Integration](storm-kafka-client.html)
 * [Apache HBase Integration](storm-hbase.html)
 * [Apache HDFS Integration](storm-hdfs.html)
 * [Apache Hive Integration](storm-hive.html)
@@ -106,20 +108,20 @@ But small change will not affect the user experience. We will notify the user wh
 * [Mongodb Integration](storm-mongodb.html)
 * [OpenTSDB Integration](storm-opentsdb.html)
 * [Kinesis Integration](storm-kinesis.html)
-* [Druid Integration](storm-druid.html)
 * [PMML Integration](storm-pmml.html)
 * [Kestrel Integration](Kestrel-and-Storm.html)
 
 #### Container, Resource Management System Integration
 
-* [YARN Integration](https://github.com/yahoo/storm-yarn), [YARN Integration via Slider](http://docs.hortonworks.com/HDPDocuments/HDP2/HDP-2.3.2/bk_yarn_resource_mgt/content/ref-7d103a48-7c2e-4b7b-aab5-62c739a32ee0.1.html)
+* [YARN Integration](https://github.com/yahoo/storm-yarn)
 * [Mesos Integration](https://github.com/mesos/storm)
 * [Docker Integration](https://hub.docker.com/_/storm/)
-* [Kubernetes Integration](https://github.com/kubernetes/kubernetes/tree/master/examples/storm)
+* [Kubernetes Integration](https://github.com/kubernetes/examples/tree/master/staging/storm)
 
 ### Advanced
 
 * [Defining a non-JVM language DSL for Storm](Defining-a-non-jvm-language-dsl-for-storm.html)
 * [Multilang protocol](Multilang-protocol.html) (how to provide support for another language)
 * [Implementation docs](Implementation-docs.html)
+* [Storm Metricstore](storm-metricstore.html)
 

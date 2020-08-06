@@ -1,9 +1,14 @@
+---
+title: Storm Kafka Integration (0.10.x+)
+layout: documentation
+documentation: true
+---
 # Storm Apache Kafka integration using the kafka-client jar
 This includes the new Apache Kafka consumer API.
 
 ## Compatibility
 
-Apache Kafka versions 0.10 onwards
+Apache Kafka versions 0.10.1.0 onwards. Please be aware that [KAFKA-7044](https://issues.apache.org/jira/browse/KAFKA-7044) can cause crashes in the spout, so you should upgrade Kafka if you are using an affected version (1.1.0, 1.1.1 or 2.0.0).
 
 ## Writing to Kafka as part of your topology
 You can create an instance of org.apache.storm.kafka.bolt.KafkaBolt and attach it as a component to your topology or if you
@@ -147,18 +152,15 @@ of Java generics.  The deserializers can be specified via the consumer propertie
 There are a few key configs to pay attention to.
 
 `setFirstPollOffsetStrategy` allows you to set where to start consuming data from.  This is used both in case of failure recovery and starting the spout
-for the first time. Allowed values include
+for the first time. The allowed values are listed in the [FirstPollOffsetStrategy javadocs](javadocs/org/apache/storm/kafka/spout/KafkaSpoutConfig.FirstPollOffsetStrategy.html).
 
- * `EARLIEST` means that the kafka spout polls records starting in the first offset of the partition, regardless of previous commits
- * `LATEST` means that the kafka spout polls records with offsets greater than the last offset in the partition, regardless of previous commits
- * `UNCOMMITTED_EARLIEST` (DEFAULT) means that the kafka spout polls records from the last committed offset, if any. If no offset has been committed, it behaves as `EARLIEST`.
- * `UNCOMMITTED_LATEST` means that the kafka spout polls records from the last committed offset, if any. If no offset has been committed, it behaves as `LATEST`.
+`setProcessingGuarantee` lets you configure what processing guarantees the spout will provide. This affects how soon consumed offsets can be committed, and the frequency of commits. See the [ProcessingGuarantee javadoc](javadocs/org/apache/storm/kafka/spout/KafkaSpoutConfig.ProcessingGuarantee.html) for details.
 
 `setRecordTranslator` allows you to modify how the spout converts a Kafka Consumer Record into a Tuple, and which stream that tuple will be published into.
 By default the "topic", "partition", "offset", "key", and "value" will be emitted to the "default" stream.  If you want to output entries to different
 streams based on the topic, storm provides `ByTopicRecordTranslator`.  See below for more examples on how to use these.
 
-`setProp` and `setProps` can be used to set KafkaConsumer properties. The list of these properties can be found in the KafkaConsumer configuration documentation on the [Kafka website](http://kafka.apache.org/documentation.html#consumerconfigs).
+`setProp` and `setProps` can be used to set KafkaConsumer properties. The list of these properties can be found in the KafkaConsumer configuration documentation on the [Kafka website](http://kafka.apache.org/documentation.html#consumerconfigs). Note that KafkaConsumer autocommit is unsupported. The KafkaSpoutConfig constructor will throw an exception if the "enable.auto.commit" property is set, and the consumer used by the spout will always have that property set to false. You can configure similar behavior to autocommit through the `setProcessingGuarantee` method on the KafkaSpoutConfig builder.
 
 ### Usage Examples
 
@@ -217,6 +219,9 @@ final Stream spoutStream = tridentTopology.newStream("kafkaSpout",
 Trident does not support multiple streams and will ignore any streams set for output.  If however the Fields are not identical for each
 output topic it will throw an exception and not continue.
 
+#### Example topologies
+Example topologies using storm-kafka-client can be found in the examples/storm-kafka-client-examples directory included in the Storm source or binary distributions.
+
 ### Custom RecordTranslators (ADVANCED)
 
 In most cases the built in SimpleRecordTranslator and ByTopicRecordTranslator should cover your use case.  If you do run into a situation where you need a custom one
@@ -240,55 +245,13 @@ streams.  If you are doing this for Trident a value must be in the List returned
 otherwise trident can throw exceptions.
 
 
-### Manual Partition Assigment (ADVANCED)
+### Manual Partition Assignment (ADVANCED)
 
-By default the KafkaSpout instances will be assigned partitions using a round robin strategy. If you need to customize partition assignment, you must implement the `ManualPartitioner` interface. The implementation can be passed to the `ManualPartitionSubscription` constructor, and the `Subscription` can then be set in the `KafkaSpoutConfig` via the `KafkaSpoutConfig.Builder` constructor. Please take care when supplying a custom implementation, since an incorrect `ManualPartitioner` implementation could leave some partitions unread, or concurrently read by multiple spout instances. See the `RoundRobinManualPartitioner` for an example of how to implement this functionality.
+By default the KafkaSpout instances will be assigned partitions using a round robin strategy. If you need to customize partition assignment, you must implement the `ManualPartitioner` interface. You can pass your implementation to the `KafkaSpoutConfig.Builder` constructor. Please take care when supplying a custom implementation, since an incorrect `ManualPartitioner` implementation could leave some partitions unread, or concurrently read by multiple spout instances. See the `RoundRobinManualPartitioner` for an example of how to implement this functionality.
 
-## Use the Maven Shade Plugin to Build the Uber Jar
+### Manual partition discovery
 
-Add the following to `REPO_HOME/storm/external/storm-kafka-client/pom.xml`
-
-```xml
-<plugin>
-    <groupId>org.apache.maven.plugins</groupId>
-    <artifactId>maven-shade-plugin</artifactId>
-    <version>2.4.1</version>
-    <executions>
-        <execution>
-            <phase>package</phase>
-            <goals>
-                <goal>shade</goal>
-            </goals>
-            <configuration>
-                <transformers>
-                    <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                        <mainClass>org.apache.storm.kafka.spout.test.KafkaSpoutTopologyMain</mainClass>
-                    </transformer>
-                </transformers>
-            </configuration>
-        </execution>
-    </executions>
-</plugin>
-```
-
-create the uber jar by running the command:
-
-`mvn package -f REPO_HOME/storm/external/storm-kafka-client/pom.xml`
-
-This will create the uber jar file with the name and location matching the following pattern:
- 
-`REPO_HOME/storm/external/storm-kafka-client/target/storm-kafka-client-1.0.x.jar`
-
-### Run Storm Topology
-
-Copy the file `REPO_HOME/storm/external/storm-kafka-client/target/storm-kafka-client-*.jar` to `STORM_HOME/extlib`
-
-Using the Kafka command line tools create three topics [test, test1, test2] and use the Kafka console producer to populate the topics with some data 
-
-Execute the command `STORM_HOME/bin/storm jar REPO_HOME/storm/external/storm/target/storm-kafka-client-*.jar org.apache.storm.kafka.spout.test.KafkaSpoutTopologyMain`
-
-With the debug level logs enabled it is possible to see the messages of each topic being redirected to the appropriate Bolt as defined 
-by the streams defined and choice of shuffle grouping.   
+You can customize how the spout discovers existing partitions, by implementing the `TopicFilter` interface. Storm-kafka-client ships with a few implementations. Like `ManualPartitioner`, you can pass your implementation to the `KafkaSpoutConfig.Builder` constructor. Note that the `TopicFilter` is only responsible for discovering partitions, deciding which of the discovered partitions to subscribe to is the responsibility of `ManualPartitioner`.
 
 ## Using storm-kafka-client with different versions of kafka
 
@@ -309,15 +272,14 @@ use Kafka-clients 0.10.0.0, you would use the following dependency in your `pom.
 You can also override the kafka clients version while building from maven, with parameter `storm.kafka.client.version`
 e.g. `mvn clean install -Dstorm.kafka.client.version=0.10.0.0`
 
-When selecting a kafka client version, you should ensure - 
- 1. kafka api is compatible. storm-kafka-client module only supports **0.10 or newer** kafka client API. For older versions,
- you can use storm-kafka module (https://github.com/apache/storm/tree/master/external/storm-kafka).  
- 2. The kafka client selected by you should be wire compatible with the broker. e.g. 0.9.x client will not work with 
- 0.8.x broker. 
+When selecting a kafka client version, you should ensure -
+ 1. The Kafka api must be compatible. The storm-kafka-client module only supports Kafka **0.10 or newer**. For older versions,
+ you can use the storm-kafka module (https://github.com/apache/storm/tree/1.x-branch/external/storm-kafka).  
+ 2. The Kafka client version selected by you should be wire compatible with the broker. Please see the [Kafka compatibility matrix](https://cwiki.apache.org/confluence/display/KAFKA/Compatibility+Matrix).
 
 # Kafka Spout Performance Tuning
 
-The Kafka spout provides two internal parameters to control its performance. The parameters can be set using the [KafkaSpoutConfig](https://github.com/apache/storm/blob/1.0.x-branch/external/storm-kafka-client/src/main/java/org/apache/storm/kafka/spout/KafkaSpoutConfig.java) methods [setOffsetCommitPeriodMs](https://github.com/apache/storm/blob/1.0.x-branch/external/storm-kafka-client/src/main/java/org/apache/storm/kafka/spout/KafkaSpoutConfig.java#L189-L193) and [setMaxUncommittedOffsets](https://github.com/apache/storm/blob/1.0.x-branch/external/storm-kafka-client/src/main/java/org/apache/storm/kafka/spout/KafkaSpoutConfig.java#L211-L217). 
+The Kafka spout provides two internal parameters to control its performance. The parameters can be set using the [setOffsetCommitPeriodMs](javadocs/org/apache/storm/kafka/spout/KafkaSpoutConfig.Builder.html#setOffsetCommitPeriodMs-long-) and [setMaxUncommittedOffsets](javadocs/org/apache/storm/kafka/spout/KafkaSpoutConfig.Builder.html#setMaxUncommittedOffsets-int-) methods. 
 
 * "offset.commit.period.ms" controls how often the spout commits to Kafka
 * "max.uncommitted.offsets" controls how many offsets can be pending commit before another poll can take place
@@ -327,40 +289,65 @@ The [Kafka consumer config] (http://kafka.apache.org/documentation.html#consumer
 
 * “fetch.min.bytes”
 * “fetch.max.wait.ms”
-* [Kafka Consumer](http://kafka.apache.org/090/javadoc/index.html?org/apache/kafka/clients/consumer/KafkaConsumer.html) instance poll timeout, which is specified for each Kafka spout using the [KafkaSpoutConfig](https://github.com/apache/storm/blob/1.0.x-branch/external/storm-kafka-client/src/main/java/org/apache/storm/kafka/spout/KafkaSpoutConfig.java) method [setPollTimeoutMs](https://github.com/apache/storm/blob/1.0.x-branch/external/storm-kafka-client/src/main/java/org/apache/storm/kafka/spout/KafkaSpoutConfig.java#L180-L184)
+* [Kafka Consumer](http://kafka.apache.org/090/javadoc/index.html?org/apache/kafka/clients/consumer/KafkaConsumer.html) instance poll timeout, which is specified for each Kafka spout using the [setPollTimeoutMs](javadocs/org/apache/storm/kafka/spout/KafkaSpoutConfig.Builder.html#setPollTimeoutMs-long-) method.
 <br/>
 
 Depending on the structure of your Kafka cluster, distribution of the data, and availability of data to poll, these parameters will have to be configured appropriately. Please refer to the Kafka documentation on Kafka parameter tuning.
 
 ### Default values
 
-Currently the Kafka spout has has the following default values, which have shown to give good performance in the test environment as described in this [blog post] (https://hortonworks.com/blog/microbenchmarking-storm-1-0-performance/)
+Currently the Kafka spout has has the following default values, which have been shown to give good performance in the test environment as described in this [blog post] (https://hortonworks.com/blog/microbenchmarking-storm-1-0-performance/)
 
 * poll.timeout.ms = 200
 * offset.commit.period.ms = 30000   (30s)
 * max.uncommitted.offsets = 10000000
 <br/>
 
-# Kafka AutoCommitMode 
+# Tuple Tracking
 
-If reliability isn't important to you -- that is, you don't care about losing tuples in failure situations --, and want to remove the overhead of tuple tracking, then you can run a KafkaSpout with AutoCommitMode.
-
-To enable it, you need to:
-
-* set Config.TOPOLOGY_ACKERS to 0;
-* enable *AutoCommitMode* in Kafka consumer configuration; 
-
-Here's one example to set AutoCommitMode in KafkaSpout:
+By default the spout only tracks emitted tuples when the processing guarantee is AT_LEAST_ONCE. It may be necessary to track
+emitted tuples with other processing guarantees to benefit from Storm features such as showing complete latency in the UI,
+or enabling backpressure with Config.TOPOLOGY_MAX_SPOUT_PENDING.
 
 ```java
 KafkaSpoutConfig<String, String> kafkaConf = KafkaSpoutConfig
-		.builder(String bootstrapServers, String ... topics)
-		.setProp(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "true")
-		.setFirstPollOffsetStrategy(FirstPollOffsetStrategy.EARLIEST)
-		.build();
+  .builder(String bootstrapServers, String ... topics)
+  .setProcessingGuarantee(ProcessingGuarantee.AT_MOST_ONCE)
+  .setTupleTrackingEnforced(true)
 ```
 
-*Note that it's not exactly At-Most-Once in Storm, as offset is committed periodically by Kafka consumer, some tuples could be replayed when KafkaSpout is crashed.*
+Note: This setting has no effect with AT_LEAST_ONCE processing guarantee, where tuple tracking is required and therefore always enabled.
 
+# Mapping from `storm-kafka` to `storm-kafka-client` spout properties
 
+This may not be an exhaustive list because the `storm-kafka` configs were taken from Storm 0.9.6
+[SpoutConfig](https://svn.apache.org/repos/asf/storm/site/releases/0.9.6/javadocs/storm/kafka/SpoutConfig.html) and
+[KafkaConfig](https://svn.apache.org/repos/asf/storm/site/releases/0.9.6/javadocs/storm/kafka/KafkaConfig.html).
+`storm-kafka-client` spout configurations were taken from Storm 1.0.6
+[KafkaSpoutConfig](https://storm.apache.org/releases/1.0.6/javadocs/org/apache/storm/kafka/spout/KafkaSpoutConfig.html) 
+and Kafka 0.10.1.0 [ConsumerConfig](https://kafka.apache.org/0101/javadoc/index.html?org/apache/kafka/clients/consumer/ConsumerConfig.html).
 
+| SpoutConfig   | KafkaSpoutConfig/ConsumerConfig | KafkaSpoutConfig Usage |
+| ------------- | ------------------------------- | ---------------------- |
+| **Setting:** `startOffsetTime`<br><br> **Default:** `EarliestTime`<br>________________________________________________ <br> **Setting:** `forceFromStart` <br><br> **Default:** `false` <br><br> `startOffsetTime` & `forceFromStart` together determine the starting offset. `forceFromStart` determines whether the Zookeeper offset is ignored. `startOffsetTime` sets the timestamp that determines the beginning offset, in case there is no offset in Zookeeper, or the Zookeeper offset is ignored | **Setting:** [`FirstPollOffsetStrategy`](javadocs/org/apache/storm/kafka/spout/KafkaSpoutConfig.FirstPollOffsetStrategy.html)<br><br> **Default:** `UNCOMMITTED_EARLIEST` <br><br> [Refer to the helper table](#helper-table-for-setting-firstpolloffsetstrategy) for picking `FirstPollOffsetStrategy` based on your `startOffsetTime` & `forceFromStart` settings | [`<KafkaSpoutConfig-Builder>.setFirstPollOffsetStrategy(<strategy-name>)`](javadocs/org/apache/storm/kafka/spout/KafkaSpoutConfig.Builder.html#setFirstPollOffsetStrategy-org.apache.storm.kafka.spout.KafkaSpoutConfig.FirstPollOffsetStrategy-)|
+| **Setting:** `scheme`<br><br> The interface that specifies how a `ByteBuffer` from a Kafka topic is transformed into Storm tuple <br>**Default:** `RawMultiScheme` | **Setting:** [`Deserializers`](https://kafka.apache.org/11/javadoc/org/apache/kafka/common/serialization/Deserializer.html)| [`<KafkaSpoutConfig-Builder>.setProp(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, <deserializer-class>)`](javadocs/org/apache/storm/kafka/spout/KafkaSpoutConfig.Builder.html#setProp-java.lang.String-java.lang.Object-)<br><br> [`<KafkaSpoutConfig-Builder>.setProp(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, <deserializer-class>)`](javadocs/org/apache/storm/kafka/spout/KafkaSpoutConfig.Builder.html#setProp-java.lang.String-java.lang.Object-)|
+| **Setting:** `fetchSizeBytes`<br><br> Message fetch size -- the number of bytes to attempt to fetch in one request to a Kafka server <br> **Default:** `1MB` | **Setting:** [`max.partition.fetch.bytes`](http://kafka.apache.org/10/documentation.html#newconsumerconfigs) | [`<KafkaSpoutConfig-Builder>.setProp(ConsumerConfig.MAX_PARTITION_FETCH_BYTES_CONFIG, <int-value>)`](javadocs/org/apache/storm/kafka/spout/KafkaSpoutConfig.Builder.html#setProp-java.lang.String-java.lang.Object-)|
+| **Setting:** `bufferSizeBytes`<br><br> Buffer size (in bytes) for network requests. The buffer size which consumer has for pulling data from producer <br> **Default:** `1MB`| **Setting:** [`receive.buffer.bytes`](http://kafka.apache.org/10/documentation.html#newconsumerconfigs) | [`<KafkaSpoutConfig-Builder>.setProp(ConsumerConfig.RECEIVE_BUFFER_CONFIG, <int-value>)`](javadocs/org/apache/storm/kafka/spout/KafkaSpoutConfig.Builder.html#setProp-java.lang.String-java.lang.Object-)|
+| **Setting:** `socketTimeoutMs`<br><br> **Default:** `10000` | **N/A** ||
+| **Setting:** `useStartOffsetTimeIfOffsetOutOfRange`<br><br> **Default:** `true` | **Setting:** [`auto.offset.reset`](http://kafka.apache.org/10/documentation.html#newconsumerconfigs) <br><br> **Default:** Note that the default value for `auto.offset.reset` is `earliest` if you have [`ProcessingGuarantee`](javadocs/org/apache/storm/kafka/spout/KafkaSpoutConfig.ProcessingGuarantee.html) set to `AT_LEAST_ONCE`, but the default value is `latest` otherwise.| [`<KafkaSpoutConfig-Builder>.setProp(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, <String>)`](javadocs/org/apache/storm/kafka/spout/KafkaSpoutConfig.Builder.html#setProp-java.lang.String-java.lang.Object-)|
+| **Setting:** `fetchMaxWait`<br><br> Maximum time in ms to wait for the response <br> **Default:** `10000` | **Setting:** [`fetch.max.wait.ms`](http://kafka.apache.org/10/documentation.html#newconsumerconfigs) | [`<KafkaSpoutConfig-Builder>.setProp(ConsumerConfig.FETCH_MAX_WAIT_MS_CONFIG, <value>)`](javadocs/org/apache/storm/kafka/spout/KafkaSpoutConfig.Builder.html#setProp-java.lang.String-java.lang.Object-)|
+| **Setting:** `maxOffsetBehind`<br><br> Specifies how long a spout attempts to retry the processing of a failed tuple. One of the scenarios is when a failing tuple's offset is more than `maxOffsetBehind` behind the acked offset, the spout stops retrying the tuple.<br>**Default:** `LONG.MAX_VALUE`| **N/A** ||
+| **Setting:** `clientId`| **Setting:** [`client.id`](http://kafka.apache.org/10/documentation.html#newconsumerconfigs)| [`<KafkaSpoutConfig-Builder>.setProp(ConsumerConfig.CLIENT_ID_CONFIG, <String>)`](javadocs/org/apache/storm/kafka/spout/KafkaSpoutConfig.Builder.html#setProp-java.lang.String-java.lang.Object-)|
+
+If you are using this table to upgrade your topology to use `storm-kafka-client` instead of `storm-kafka`, then you will also need to migrate the consumer offsets from ZooKeeper to Kafka broker. Use [`storm-kafka-migration`](https://github.com/apache/storm/tree/master/external/storm-kafka-migration) tool to migrate the Kafka consumer offsets.
+
+#### Helper table for setting `FirstPollOffsetStrategy`
+
+Pick and set `FirstPollOffsetStrategy` based on `startOffsetTime` & `forceFromStart` settings:
+
+| `startOffsetTime`    | `forceFromStart` | `FirstPollOffsetStrategy` |
+| -------------------- | ---------------- | ------------------------- |
+| `EarliestTime` | `true` | `EARLIEST` |
+| `EarliestTime` | `false` | `UNCOMMITTED_EARLIEST` |
+| `LatestTime` | `true` | `LATEST` |
+| `LatestTime` | `false` | `UNCOMMITTED_LATEST` |

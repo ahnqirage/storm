@@ -104,7 +104,7 @@ int check_executor_permissions(char *executable_file) {
   }
 
   if (binary_gid != getgid()) {
-    fprintf(LOGFILE, "The configured nodemanager group %d is different from"
+    fprintf(LOGFILE, "ERROR: The configured worker-launcher group %d is different from"
             " the group of the executable %d\n", getgid(), binary_gid);
     return -1;
   }
@@ -185,7 +185,11 @@ int change_user(uid_t user, gid_t group) {
 
 char *get_container_launcher_file(const char* work_dir) {
   char *ret;
-  asprintf(&ret, "%s/%s", work_dir, CONTAINER_SCRIPT);
+  int bytesPrinted = asprintf(&ret, "%s/%s", work_dir, CONTAINER_SCRIPT);
+  if (bytesPrinted == -1) {
+    //asprintf failed, stop the process
+    exit(EXIT_FAILURE);
+  }
   return ret;
 }
 
@@ -305,10 +309,10 @@ int set_user(const char *user) {
 }
 
 /**
- * Open a file as the node manager and return a file descriptor for it.
+ * Open a file as the worker-launcher user and return a file descriptor for it.
  * Returns -1 on error
  */
-static int open_file_as_nm(const char* filename) {
+static int open_file_as_wl(const char* filename) {
   uid_t user = geteuid();
   gid_t group = getegid();
   if (change_effective_user(launcher_uid, launcher_gid) != 0) {
@@ -316,7 +320,7 @@ static int open_file_as_nm(const char* filename) {
   }
   int result = open(filename, O_RDONLY);
   if (result == -1) {
-    fprintf(LOGFILE, "Can't open file %s as node manager - %s\n", filename,
+    fprintf(LOGFILE, "Can't open file %s as worker-launcher user - %s\n", filename,
 	    strerror(errno));
   }
   if (change_effective_user(user, group)) {
@@ -532,9 +536,9 @@ int signal_container_as_user(const char *user, int pid, int sig) {
 }
 
 /**
- * Delete a final directory as the node manager user.
+ * Delete a final directory as the worker-launcher user.
  */
-static int rmdir_as_nm(const char* path) {
+static int rmdir_as_wl(const char* path) {
   int user_uid = geteuid();
   int user_gid = getegid();
   int ret = change_effective_user(launcher_uid, launcher_gid);
@@ -563,7 +567,11 @@ static int remove_files_from_dir(const char *path) {
           continue;
       }
       char *newpath;
-      asprintf(&newpath, "%s/%s", path, entry->d_name);
+      int bytesPrinted = asprintf(&newpath, "%s/%s", path, entry->d_name);
+      if (bytesPrinted == -1) {
+        //asprintf failed, stop the process
+        exit(EXIT_FAILURE);
+      }
       if(newpath) {
         // Recur on anything in the directory.
         int new_exit = recursive_delete(newpath, 0);
@@ -585,14 +593,21 @@ int recursive_delete(const char *path, int supervisor_owns_dir) {
     return UNABLE_TO_BUILD_PATH;
   }
 
+  struct stat file_stat;
+
   if(access(path, F_OK) != 0) {
     if(errno == ENOENT) {
-      return 0;
-    }
-    // Can probably return here, but we'll try to lstat anyway.
-  }
+       if(lstat(path, &file_stat) != 0) {
+         fprintf(LOGFILE, "Failed to stat %s: %s", path, strerror(errno));
+         return 0;
+       }
+       // we need to handle symlinks that target missing files.
+       if((file_stat.st_mode & S_IFMT) != S_IFLNK) {
+         return 0;
+       }
+     }
+   }
 
-  struct stat file_stat;
   if(lstat(path, &file_stat) != 0) {
     fprintf(LOGFILE, "Failed to delete %s: %s", path, strerror(errno));
     return UNABLE_TO_STAT_FILE;
@@ -613,7 +628,7 @@ int recursive_delete(const char *path, int supervisor_owns_dir) {
 
     // Delete the actual directory.
     if (supervisor_owns_dir) {
-      return rmdir_as_nm(path);
+      return rmdir_as_wl(path);
     }
     else if (rmdir(path) != 0) {
       fprintf(LOGFILE, "Couldn't delete directory %s - %s\n", path, strerror(errno));
@@ -643,7 +658,7 @@ int exec_as_user(const char * working_dir, const char * script_file) {
   }
 
   // open launch script
-  int script_file_source = open_file_as_nm(script_file);
+  int script_file_source = open_file_as_wl(script_file);
   if (script_file_source == -1) {
     return -1;
   }
@@ -685,7 +700,7 @@ int fork_as_user(const char * working_dir, const char * script_file) {
   }
 
   // open launch script
-  int script_file_source = open_file_as_nm(script_file);
+  int script_file_source = open_file_as_wl(script_file);
   if (script_file_source == -1) {
     return -1;
   }

@@ -1,95 +1,113 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.  The ASF licenses this file to you under the Apache License, Version
+ * 2.0 (the "License"); you may not use this file except in compliance with the License.  You may obtain a copy of the License at
  *
  * http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions
+ * and limitations under the License.
  */
+
 package org.apache.storm.daemon;
 
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Queue;
+import java.util.Random;
+import java.util.function.BooleanSupplier;
 import org.apache.storm.Config;
 import org.apache.storm.Thrift;
-import org.apache.storm.daemon.metrics.BuiltinMetrics;
-import org.apache.storm.daemon.metrics.BuiltinMetricsUtil;
 import org.apache.storm.daemon.worker.WorkerState;
 import org.apache.storm.executor.Executor;
+import org.apache.storm.executor.ExecutorTransfer;
 import org.apache.storm.generated.Bolt;
 import org.apache.storm.generated.ComponentObject;
+import org.apache.storm.generated.DebugOptions;
 import org.apache.storm.generated.JavaObject;
 import org.apache.storm.generated.ShellComponent;
 import org.apache.storm.generated.SpoutSpec;
 import org.apache.storm.generated.StateSpoutSpec;
 import org.apache.storm.generated.StormTopology;
 import org.apache.storm.grouping.LoadAwareCustomStreamGrouping;
-import org.apache.storm.grouping.LoadMapping;
 import org.apache.storm.hooks.ITaskHook;
 import org.apache.storm.hooks.info.EmitInfo;
+import org.apache.storm.metrics2.StormMetricRegistry;
+import org.apache.storm.metrics2.TaskMetrics;
 import org.apache.storm.spout.ShellSpout;
 import org.apache.storm.stats.CommonStats;
 import org.apache.storm.task.ShellBolt;
 import org.apache.storm.task.TopologyContext;
 import org.apache.storm.task.WorkerTopologyContext;
+import org.apache.storm.tuple.AddressedTuple;
 import org.apache.storm.tuple.Tuple;
 import org.apache.storm.tuple.TupleImpl;
+import org.apache.storm.tuple.Values;
 import org.apache.storm.utils.ConfigUtils;
 import org.apache.storm.utils.Utils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.Callable;
-
 public class Task {
 
     private static final Logger LOG = LoggerFactory.getLogger(Task.class);
-
-    private Executor executor;
-    private WorkerState workerData;
-    private TopologyContext systemTopologyContext;
-    private TopologyContext userTopologyContext;
-    private WorkerTopologyContext workerTopologyContext;
-    private LoadMapping loadMapping;
-    private Integer taskId;
-    private String componentId;
-    private Object taskObject; // Spout/Bolt object
-    private Map<String, Object> topoConf;
-    private Callable<Boolean> emitSampler;
-    private CommonStats executorStats;
-    private Map<String, Map<String, LoadAwareCustomStreamGrouping>> streamComponentToGrouper;
-    private BuiltinMetrics builtInMetrics;
-    private boolean debug;
+    private final TaskMetrics taskMetrics;
+    private final Executor executor;
+    private final WorkerState workerData;
+    private final TopologyContext systemTopologyContext;
+    private final TopologyContext userTopologyContext;
+    private final WorkerTopologyContext workerTopologyContext;
+    private final Integer taskId;
+    private final String componentId;
+    private final Object taskObject; // Spout/Bolt object
+    private final Map<String, Object> topoConf;
+    private final BooleanSupplier emitSampler;
+    private final CommonStats executorStats;
+    private final Map<String, Map<String, LoadAwareCustomStreamGrouping>> streamComponentToGrouper;
+    private final HashMap<String, ArrayList<LoadAwareCustomStreamGrouping>> streamToGroupers;
+    private final boolean debug;
 
     public Task(Executor executor, Integer taskId) throws IOException {
         this.taskId = taskId;
         this.executor = executor;
         this.workerData = executor.getWorkerData();
-        this.topoConf = executor.getStormConf();
+        this.topoConf = executor.getTopoConf();
         this.componentId = executor.getComponentId();
         this.streamComponentToGrouper = executor.getStreamToComponentToGrouper();
+        this.streamToGroupers = getGroupersPerStream(streamComponentToGrouper);
         this.executorStats = executor.getStats();
-        this.builtInMetrics = BuiltinMetricsUtil.mkData(executor.getType(), this.executorStats);
         this.workerTopologyContext = executor.getWorkerTopologyContext();
         this.emitSampler = ConfigUtils.mkStatsSampler(topoConf);
-        this.loadMapping = workerData.getLoadMapping();
         this.systemTopologyContext = mkTopologyContext(workerData.getSystemTopology());
         this.userTopologyContext = mkTopologyContext(workerData.getTopology());
         this.taskObject = mkTaskObject();
         this.debug = topoConf.containsKey(Config.TOPOLOGY_DEBUG) && (Boolean) topoConf.get(Config.TOPOLOGY_DEBUG);
         this.addTaskHooks();
+        this.taskMetrics = new TaskMetrics(this.workerTopologyContext, this.componentId, this.taskId, workerData.getMetricRegistry());
+    }
+
+    private static HashMap<String, ArrayList<LoadAwareCustomStreamGrouping>> getGroupersPerStream(
+        Map<String, Map<String, LoadAwareCustomStreamGrouping>> streamComponentToGrouper) {
+        HashMap<String, ArrayList<LoadAwareCustomStreamGrouping>> result = new HashMap<>(streamComponentToGrouper.size());
+
+        for (Entry<String, Map<String, LoadAwareCustomStreamGrouping>> entry : streamComponentToGrouper.entrySet()) {
+            String stream = entry.getKey();
+            Map<String, LoadAwareCustomStreamGrouping> groupers = entry.getValue();
+            ArrayList<LoadAwareCustomStreamGrouping> perStreamGroupers = new ArrayList<>();
+            if (groupers != null) { // null for __system bolt
+                for (LoadAwareCustomStreamGrouping grouper : groupers.values()) {
+                    perStreamGroupers.add(grouper);
+                }
+            }
+            result.put(stream, perStreamGroupers);
+        }
+        return result;
     }
 
     public List<Integer> getOutgoingTasks(Integer outTaskId, String stream, List<Object> values) {
@@ -105,12 +123,15 @@ public class Task {
         if (grouping != null && grouping != GrouperFactory.DIRECT) {
             throw new IllegalArgumentException("Cannot emitDirect to a task expecting a regular grouping");
         }
-        new EmitInfo(values, stream, taskId, Collections.singletonList(outTaskId)).applyOn(userTopologyContext);
+        if (!userTopologyContext.getHooks().isEmpty()) {
+            new EmitInfo(values, stream, taskId, Collections.singletonList(outTaskId)).applyOn(userTopologyContext);
+        }
+
         try {
-            if (emitSampler.call()) {
-                executorStats.emittedTuple(stream);
+            if (emitSampler.getAsBoolean()) {
+                executorStats.emittedTuple(stream, this.taskMetrics.getEmitted(stream));
                 if (null != outTaskId) {
-                    executorStats.transferredTuples(stream, 1);
+                    executorStats.transferredTuples(stream, 1, this.taskMetrics.getTransferred(stream));
                 }
             }
         } catch (Exception e) {
@@ -127,25 +148,29 @@ public class Task {
             LOG.info("Emitting Tuple: taskId={} componentId={} stream={} values={}", taskId, componentId, stream, values);
         }
 
-        List<Integer> outTasks = new ArrayList<>();
-        if (!streamComponentToGrouper.containsKey(stream)) {
-            throw new IllegalArgumentException("Unknown stream ID: " + stream);
-        }
-        if (null != streamComponentToGrouper.get(stream)) {
-            // null value for __system
-            for (LoadAwareCustomStreamGrouping grouper : streamComponentToGrouper.get(stream).values()) {
+        ArrayList<Integer> outTasks = new ArrayList<>();
+
+        ArrayList<LoadAwareCustomStreamGrouping> groupers = streamToGroupers.get(stream);
+        if (null != groupers) {
+            for (int i = 0; i < groupers.size(); ++i) {
+                LoadAwareCustomStreamGrouping grouper = groupers.get(i);
                 if (grouper == GrouperFactory.DIRECT) {
                     throw new IllegalArgumentException("Cannot do regular emit to direct stream");
                 }
-                List<Integer> compTasks = grouper.chooseTasks(taskId, values, loadMapping);
+                List<Integer> compTasks = grouper.chooseTasks(taskId, values);
                 outTasks.addAll(compTasks);
             }
+        } else {
+            throw new IllegalArgumentException("Unknown stream ID: " + stream);
         }
-        new EmitInfo(values, stream, taskId, outTasks).applyOn(userTopologyContext);
+
+        if (!userTopologyContext.getHooks().isEmpty()) {
+            new EmitInfo(values, stream, taskId, outTasks).applyOn(userTopologyContext);
+        }
         try {
-            if (emitSampler.call()) {
-                executorStats.emittedTuple(stream);
-                executorStats.transferredTuples(stream, outTasks.size());
+            if (emitSampler.getAsBoolean()) {
+                executorStats.emittedTuple(stream, this.taskMetrics.getEmitted(stream));
+                executorStats.transferredTuples(stream, outTasks.size(), this.taskMetrics.getTransferred(stream));
             }
         } catch (Exception e) {
             throw new RuntimeException(e);
@@ -154,7 +179,7 @@ public class Task {
     }
 
     public Tuple getTuple(String stream, List values) {
-        return new TupleImpl(systemTopologyContext, values, systemTopologyContext.getThisTaskId(), stream);
+        return new TupleImpl(systemTopologyContext, values, executor.getComponentId(), systemTopologyContext.getThisTaskId(), stream);
     }
 
     public Integer getTaskId() {
@@ -173,8 +198,36 @@ public class Task {
         return taskObject;
     }
 
-    public BuiltinMetrics getBuiltInMetrics() {
-        return builtInMetrics;
+    public TaskMetrics getTaskMetrics() {
+        return taskMetrics;
+    }
+
+    // Non Blocking call. If cannot emit to destination immediately, such tuples will be added to `pendingEmits` argument
+    public void sendUnanchored(String stream, List<Object> values, ExecutorTransfer transfer, Queue<AddressedTuple> pendingEmits) {
+        Tuple tuple = getTuple(stream, values);
+        List<Integer> tasks = getOutgoingTasks(stream, values);
+        for (int i = 0; i < tasks.size(); i++) {
+            AddressedTuple addressedTuple = new AddressedTuple(tasks.get(i), tuple);
+            transfer.tryTransfer(addressedTuple, pendingEmits);
+        }
+    }
+
+    /**
+     * Send sampled data to the eventlogger if the global or component level debug flag is set (via nimbus api).
+     */
+    public void sendToEventLogger(Executor executor, List values,
+                                  String componentId, Object messageId, Random random, Queue<AddressedTuple> overflow) {
+        Map<String, DebugOptions> componentDebug = executor.getStormComponentDebug().get();
+        DebugOptions debugOptions = componentDebug.get(componentId);
+        if (debugOptions == null) {
+            debugOptions = componentDebug.get(executor.getStormId());
+        }
+        double spct = ((debugOptions != null) && (debugOptions.is_enable())) ? debugOptions.get_samplingpct() : 0;
+        if (spct > 0 && (random.nextDouble() * 100) < spct) {
+            sendUnanchored(StormCommon.EVENTLOGGER_STREAM_ID,
+                           new Values(componentId, messageId, System.currentTimeMillis(), values),
+                           executor.getExecutorTransfer(), overflow);
+        }
     }
 
     private TopologyContext mkTopologyContext(StormTopology topology) throws IOException {
@@ -189,15 +242,16 @@ public class Task {
             workerData.getBlobToLastKnownVersion(),
             workerData.getTopologyId(),
             ConfigUtils.supervisorStormResourcesPath(
-                    ConfigUtils.supervisorStormDistRoot(conf, workerData.getTopologyId())),
-                    ConfigUtils.workerPidsRoot(conf, workerData.getWorkerId()),
+                ConfigUtils.supervisorStormDistRoot(conf, workerData.getTopologyId())),
+            ConfigUtils.workerPidsRoot(conf, workerData.getWorkerId()),
             taskId,
-            workerData.getPort(), workerData.getTaskIds(),
+            workerData.getPort(), workerData.getLocalTaskIds(),
             workerData.getDefaultSharedResources(),
             workerData.getUserSharedResources(),
             executor.getSharedExecutorData(),
             executor.getIntervalToTaskToMetricToRegistry(),
-            executor.getOpenOrPrepareWasCalled());
+            executor.getOpenOrPrepareWasCalled(),
+            workerData.getMetricRegistry());
     }
 
     private Object mkTaskObject() {
@@ -246,4 +300,8 @@ public class Task {
         }
     }
 
+    @Override
+    public String toString() {
+        return taskId.toString();
+    }
 }

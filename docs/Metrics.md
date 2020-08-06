@@ -6,6 +6,8 @@ documentation: true
 Storm exposes a metrics interface to report summary statistics across the full topology.
 The numbers you see on the UI come from some of these built in metrics, but are reported through the worker heartbeats instead of through the IMetricsConsumer described below.
 
+If you are looking for cluster wide monitoring please see [Cluster Metrics](ClusterMetrics.html).
+
 ### Metric Types
 
 Metrics have to implement [`IMetric`]({{page.git-blob-base}}/storm-client/src/jvm/org/apache/storm/metric/api/IMetric.java) which contains just one method, `getValueAndReset` -- do any remaining work to find the summary value, and reset back to an initial state. For example, the MeanReducer divides the running total by its running count to find the mean, then initializes both values back to zero.
@@ -50,7 +52,7 @@ Storm adds a MetricsConsumerBolt to your topolology for each class in the `topol
 Storm provides some built-in metrics consumers for you to try out to see which metrics are provided in your topology.
 
 * [`LoggingMetricsConsumer`]({{page.git-blob-base}}/storm-client/src/jvm/org/apache/storm/metric/LoggingMetricsConsumer.java) -- listens for all metrics and dumps them to log file with TSV (Tab Separated Values).
-* [`HttpForwardingMetricsConsumer`]({{page.git-blob-base}}/storm-client-misc/src/jvm/org/apache/storm/misc/metric/HttpForwardingMetricsConsumer.java) -- listens for all metrics and POSTs them serialized to a configured URL via HTTP. Storm also provides [`HttpForwardingMetricsServer`]({{page.git-blob-base}}/storm-core/src/jvm/org/apache/storm/metric/HttpForwardingMetricsServer.java) as abstract class so you can extend this class and run as a HTTP server, and handle metrics sent by HttpForwardingMetricsConsumer.
+* [`HttpForwardingMetricsConsumer`]({{page.git-blob-base}}/examples/storm-loadgen/src/main/java/org/apache/storm/loadgen/HttpForwardingMetricsConsumer.java) -- listens for all metrics and POSTs them serialized to a configured URL via HTTP. Storm also provides [`HttpForwardingMetricsServer`]({{page.git-blob-base}}/storm-core/src/jvm/org/apache/storm/metric/HttpForwardingMetricsServer.java) as abstract class so you can extend this class and run as a HTTP server, and handle metrics sent by HttpForwardingMetricsConsumer.
 
 Also, Storm exposes the interface [`IMetricsConsumer`]({{page.git-blob-base}}/storm-client/src/jvm/org/apache/storm/metric/api/IMetricsConsumer.java) for implementing Metrics Consumer so you can create custom metrics consumers and attach to their topologies, or use other great implementation of Metrics Consumers provided by Storm community. Some of examples are [versign/storm-graphite](https://github.com/verisign/storm-graphite), and [storm-metrics-statsd](https://github.com/endgameinc/storm-metrics-statsd).
 
@@ -198,13 +200,21 @@ This is also just for bolts.  It is the average amount of time between when `exe
 This metric records how much time a spout was idle because more tuples than `topology.max.spout.pending` were still outstanding.  This is the total time in milliseconds, not the average amount of time and is not sub-sampled.
 
 
-##### `__skipped-throttle-ms`
+##### `__skipped-backpressure-ms`
 
-This metric records how much time a spout was idle because back-pressure indicated that downstream queues in the topology were too full.  This is the total time in milliseconds, not the average amount of time and is not sub-sampled.
+This metric records how much time a spout was idle because back-pressure indicated that downstream queues in the topology were too full.  This is the total time in milliseconds, not the average amount of time and is not sub-sampled. This is similar to skipped-throttle-ms in Storm 1.x.
 
 ##### `skipped-inactive-ms`
 
 This metric records how much time a spout was idle because the topology was deactivated.  This is the total time in milliseconds, not the average amount of time and is not sub-sampled.
+
+#### Error Reporting Metrics
+
+Storm also collects error reporting metrics for bolts and spouts.
+
+##### `__reported-error-count`
+
+This metric records how many errors were reported by a spout/bolt. It is the total number of times the `reportError` method was called.
 
 #### Queue Metrics
 
@@ -289,32 +299,36 @@ The value is a map where the key is a NodeInfo class for the downstream worker i
 
 ##### JVM Memory
 
-JVM memory usage is reported through `memory/nonHeap` for off heap memory and `memory/heap` for on heap memory.  These values come from the [MemoryUsage](https://docs.oracle.com/javase/8/docs/api/index.html?java/lang/management/MemoryUsage.html) mxbean.  Each of the metrics are reported as a map with the following keys, and values returned by the corresponding java code.
+JVM memory usage is reported through `memory.non-heap` for off heap memory, `memory.heap` for on heap memory and `memory.total` for combined values.  These values come from the [MemoryUsage](https://docs.oracle.com/javase/8/docs/api/index.html?java/lang/management/MemoryUsage.html) mxbean.  Each of the metrics are reported as a map with the following keys, and values returned by the corresponding java code.
 
 | Key | Corresponding Code |
 |--------|--------------------|
-| `maxBytes` | `memUsage.getMax()` |
-| `committedBytes` | `memUsage.getCommitted()` |
-| `initBytes` | `memUsage.getInit()` |
-| `usedBytes` | `memUsage.getUsed()` |
-| `virtualFreeBytes` | `memUsage.getMax() - memUsage.getUsed()` |
-| `unusedBytes` | `memUsage.getCommitted() - memUsage.getUsed()` |
+| `max` | `memUsage.getMax()` |
+| `committed` | `memUsage.getCommitted()` |
+| `init` | `memUsage.getInit()` |
+| `used` | `memUsage.getUsed()` |
+| `usage` | `Ratio.of(memUsage.getUsed(), memUsage.getMax())` |
 
 ##### JVM Garbage Collection
 
-The exact GC metric name depends on the garbage collector that your worker uses.  The data is all collected from `ManagementFactory.getGarbageCollectorMXBeans()` and the name of the metrics is `"GC/"` followed by the name of the returned bean with white space removed.  The reported metrics are just
+The exact GC metric name depends on the garbage collector that your worker uses.  The data is all collected from `ManagementFactory.getGarbageCollectorMXBeans()` and the name of the metrics is `"GC"` followed by the name of the returned bean with white space removed.  The reported metrics are just
 
 * `count` the number of gc events that happened and
-* `timeMs` the total number of milliseconds that were spent doing gc.  
+* `time` the total number of milliseconds that were spent doing gc.  
 
 Please refer to the [JVM documentation](https://docs.oracle.com/javase/8/docs/api/java/lang/management/ManagementFactory.html#getGarbageCollectorMXBeans--) for more details.
 
 ##### JVM Misc
 
-* `threadCount` is the number of threads currently in the JVM.
+* There are metrics prefixed with `threads` providing the number of threads, daemon threads, blocked and deadlocked threads.
 
 ##### Uptime
 
 * `uptimeSecs` reports the number of seconds the worker has been up for
 * `newWorkerEvent` is 1 when a worker is first started and 0 all other times.  This can be used to tell when a worker has crashed and is restarted.
 * `startTimeSecs` is when the worker started in seconds since the epoch
+
+##### doHeartbeat-calls
+
+* `doHeartbeat-calls` is a meter that indicates the rate the worker is performing heartbeats.
+

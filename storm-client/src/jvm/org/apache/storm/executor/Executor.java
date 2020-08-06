@@ -1,46 +1,54 @@
 /**
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
+ * Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.  The ASF licenses this file to you under the Apache License, Version
+ * 2.0 (the "License"); you may not use this file except in compliance with the License.  You may obtain a copy of the License at
+ * <p>
  * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * <p>
+ * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions
+ * and limitations under the License.
  */
+
 package org.apache.storm.executor;
 
-import com.google.common.annotations.VisibleForTesting;
-import com.google.common.collect.Lists;
-import com.lmax.disruptor.EventHandler;
-import com.lmax.disruptor.dsl.ProducerType;
+import com.codahale.metrics.Counter;
+import com.codahale.metrics.Gauge;
+import com.codahale.metrics.Histogram;
+import com.codahale.metrics.Meter;
+import com.codahale.metrics.Snapshot;
+import com.codahale.metrics.Timer;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Queue;
 import java.util.Random;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
+import java.util.stream.Collectors;
 import org.apache.storm.Config;
 import org.apache.storm.Constants;
+import org.apache.storm.ICredentialsListener;
 import org.apache.storm.StormTimer;
 import org.apache.storm.cluster.ClusterStateContext;
 import org.apache.storm.cluster.ClusterUtils;
 import org.apache.storm.cluster.DaemonType;
 import org.apache.storm.cluster.IStormClusterState;
+import org.apache.storm.daemon.Acker;
 import org.apache.storm.daemon.GrouperFactory;
 import org.apache.storm.daemon.StormCommon;
 import org.apache.storm.daemon.Task;
+import org.apache.storm.daemon.metrics.ErrorReportingMetrics;
 import org.apache.storm.daemon.worker.WorkerState;
 import org.apache.storm.executor.bolt.BoltExecutor;
 import org.apache.storm.executor.error.IReportError;
@@ -48,38 +56,36 @@ import org.apache.storm.executor.error.ReportError;
 import org.apache.storm.executor.error.ReportErrorAndDie;
 import org.apache.storm.executor.spout.SpoutExecutor;
 import org.apache.storm.generated.Bolt;
+import org.apache.storm.generated.Credentials;
 import org.apache.storm.generated.DebugOptions;
 import org.apache.storm.generated.Grouping;
 import org.apache.storm.generated.SpoutSpec;
 import org.apache.storm.generated.StormTopology;
 import org.apache.storm.grouping.LoadAwareCustomStreamGrouping;
+import org.apache.storm.grouping.LoadMapping;
 import org.apache.storm.metric.api.IMetric;
 import org.apache.storm.metric.api.IMetricsConsumer;
-import org.apache.storm.stats.BoltExecutorStats;
+import org.apache.storm.shade.com.google.common.annotations.VisibleForTesting;
+import org.apache.storm.shade.com.google.common.collect.Lists;
+import org.apache.storm.shade.org.jctools.queues.MpscChunkedArrayQueue;
+import org.apache.storm.shade.org.json.simple.JSONValue;
+import org.apache.storm.shade.org.json.simple.parser.ParseException;
+import org.apache.storm.stats.ClientStatsUtil;
 import org.apache.storm.stats.CommonStats;
-import org.apache.storm.stats.SpoutExecutorStats;
-import org.apache.storm.stats.StatsUtil;
 import org.apache.storm.task.WorkerTopologyContext;
 import org.apache.storm.tuple.AddressedTuple;
 import org.apache.storm.tuple.Fields;
-import org.apache.storm.tuple.Tuple;
 import org.apache.storm.tuple.TupleImpl;
 import org.apache.storm.tuple.Values;
 import org.apache.storm.utils.ConfigUtils;
-import org.apache.storm.utils.Utils;
-import org.apache.storm.utils.DisruptorBackpressureCallback;
-import org.apache.storm.utils.DisruptorQueue;
+import org.apache.storm.utils.JCQueue;
 import org.apache.storm.utils.ObjectReader;
 import org.apache.storm.utils.Time;
-import org.apache.storm.utils.WorkerBackpressureThread;
-import org.json.simple.JSONValue;
-import org.json.simple.parser.ParseException;
+import org.apache.storm.utils.Utils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.concurrent.Callable;
-
-public abstract class Executor implements Callable, EventHandler<Object> {
+public abstract class Executor implements Callable, JCQueue.Consumer {
 
     private static final Logger LOG = LoggerFactory.getLogger(Executor.class);
 
@@ -93,33 +99,39 @@ public abstract class Executor implements Callable, EventHandler<Object> {
     protected final Map<String, Object> conf;
     protected final String stormId;
     protected final HashMap sharedExecutorData;
+    protected final CountDownLatch workerReady;
     protected final AtomicBoolean stormActive;
     protected final AtomicReference<Map<String, DebugOptions>> stormComponentDebug;
     protected final Runnable suicideFn;
     protected final IStormClusterState stormClusterState;
     protected final Map<Integer, String> taskToComponent;
-    protected CommonStats stats;
     protected final Map<Integer, Map<Integer, Map<String, IMetric>>> intervalToTaskToMetricToRegistry;
     protected final Map<String, Map<String, LoadAwareCustomStreamGrouping>> streamToComponentToGrouper;
+    protected final List<LoadAwareCustomStreamGrouping> groupers;
     protected final ReportErrorAndDie reportErrorDie;
-    protected final Callable<Boolean> sampler;
-    protected ExecutorTransfer executorTransfer;
+    protected final BooleanSupplier sampler;
     protected final String type;
-    protected final AtomicBoolean throttleOn;
-
     protected final IReportError reportError;
     protected final Random rand;
-    protected final DisruptorQueue transferQueue;
-    protected final DisruptorQueue receiveQueue;
-    protected Map<Integer, Task> idToTask;
+    protected final JCQueue receiveQueue;
     protected final Map<String, String> credentials;
     protected final Boolean isDebug;
     protected final Boolean hasEventLoggers;
+    protected final boolean ackingEnabled;
+    protected final ErrorReportingMetrics errorReportingMetrics;
+    protected final MpscChunkedArrayQueue<AddressedTuple> pendingEmits = new MpscChunkedArrayQueue<>(1024, (int) Math.pow(2, 30));
+    private final AddressedTuple flushTuple;
+    protected ExecutorTransfer executorTransfer;
+    protected ArrayList<Task> idToTask;
+    protected int idToTaskBase;
     protected String hostname;
+    private static final double msDurationFactor = 1.0 / TimeUnit.MILLISECONDS.toNanos(1);
+    private AtomicBoolean needToRefreshCreds = new AtomicBoolean(false);
 
-    protected Executor(WorkerState workerData, List<Long> executorId, Map<String, String> credentials) {
+    protected Executor(WorkerState workerData, List<Long> executorId, Map<String, String> credentials, String type) {
         this.workerData = workerData;
         this.executorId = executorId;
+        this.type = type;
         this.workerTopologyContext = workerData.getWorkerTopologyContext();
         this.taskIds = StormCommon.executorIdToTasks(executorId);
         this.componentId = workerTopologyContext.getComponentId(taskIds.get(0));
@@ -129,50 +141,46 @@ public abstract class Executor implements Callable, EventHandler<Object> {
         this.stormId = workerData.getTopologyId();
         this.conf = workerData.getConf();
         this.sharedExecutorData = new HashMap();
+        this.workerReady = workerData.getIsWorkerActive();
         this.stormActive = workerData.getIsTopologyActive();
         this.stormComponentDebug = workerData.getStormComponentToDebug();
 
-        this.transferQueue = mkExecutorBatchQueue(topoConf, executorId);
-        this.executorTransfer = new ExecutorTransfer(workerData, transferQueue, topoConf);
+        this.executorTransfer = new ExecutorTransfer(workerData, topoConf);
 
         this.suicideFn = workerData.getSuicideCallback();
         try {
-            this.stormClusterState = ClusterUtils.mkStormClusterState(workerData.getStateStorage(), Utils.getWorkerACL(topoConf),
-                    new ClusterStateContext(DaemonType.WORKER));
+            this.stormClusterState = ClusterUtils.mkStormClusterState(workerData.getStateStorage(),
+                                                                      new ClusterStateContext(DaemonType.WORKER, topoConf));
         } catch (Exception e) {
             throw Utils.wrapInRuntime(e);
-        }
-
-        StormTopology topology = workerTopologyContext.getRawTopology();
-        Map<String, SpoutSpec> spouts = topology.get_spouts();
-        Map<String, Bolt> bolts = topology.get_bolts();
-        if (spouts.containsKey(componentId)) {
-            this.type = StatsUtil.SPOUT;
-            this.stats = new SpoutExecutorStats(ConfigUtils.samplingRate(topoConf),ObjectReader.getInt(topoConf.get(Config.NUM_STAT_BUCKETS)));
-        } else if (bolts.containsKey(componentId)) {
-            this.type = StatsUtil.BOLT;
-            this.stats = new BoltExecutorStats(ConfigUtils.samplingRate(topoConf),ObjectReader.getInt(topoConf.get(Config.NUM_STAT_BUCKETS)));
-        } else {
-            throw new RuntimeException("Could not find " + componentId + " in " + topology);
         }
 
         this.intervalToTaskToMetricToRegistry = new HashMap<>();
         this.taskToComponent = workerData.getTaskToComponent();
         this.streamToComponentToGrouper = outboundComponents(workerTopologyContext, componentId, topoConf);
+        if (this.streamToComponentToGrouper != null) {
+            this.groupers = streamToComponentToGrouper.values().stream()
+                                                      .filter(Objects::nonNull)
+                                                      .flatMap(m -> m.values().stream()).collect(Collectors.toList());
+        } else {
+            this.groupers = Collections.emptyList();
+        }
         this.reportError = new ReportError(topoConf, stormClusterState, stormId, componentId, workerTopologyContext);
         this.reportErrorDie = new ReportErrorAndDie(reportError, suicideFn);
         this.sampler = ConfigUtils.mkStatsSampler(topoConf);
-        this.throttleOn = workerData.getThrottleOn();
         this.isDebug = ObjectReader.getBoolean(topoConf.get(Config.TOPOLOGY_DEBUG), false);
         this.rand = new Random(Utils.secureRandomLong());
         this.credentials = credentials;
         this.hasEventLoggers = StormCommon.hasEventLoggers(topoConf);
+        this.ackingEnabled = StormCommon.hasAckers(topoConf);
 
         try {
             this.hostname = Utils.hostname();
         } catch (UnknownHostException ignored) {
             this.hostname = "";
         }
+        this.errorReportingMetrics = new ErrorReportingMetrics();
+        flushTuple = AddressedTuple.createFlushTuple(workerTopologyContext);
     }
 
     public static Executor mkExecutor(WorkerState workerState, List<Long> executorId, Map<String, String> credentials) {
@@ -183,27 +191,26 @@ public abstract class Executor implements Callable, EventHandler<Object> {
         String componentId = workerTopologyContext.getComponentId(taskIds.get(0));
 
         String type = getExecutorType(workerTopologyContext, componentId);
-        if (StatsUtil.SPOUT.equals(type)) {
+        if (ClientStatsUtil.SPOUT.equals(type)) {
             executor = new SpoutExecutor(workerState, executorId, credentials);
-            executor.stats = new SpoutExecutorStats(ConfigUtils.samplingRate(executor.getStormConf()),ObjectReader.getInt(executor.getStormConf().get(Config.NUM_STAT_BUCKETS)));
         } else {
             executor = new BoltExecutor(workerState, executorId, credentials);
-            executor.stats = new BoltExecutorStats(ConfigUtils.samplingRate(executor.getStormConf()),ObjectReader.getInt(executor.getStormConf().get(Config.NUM_STAT_BUCKETS)));
         }
 
+        int minId = Integer.MAX_VALUE;
         Map<Integer, Task> idToTask = new HashMap<>();
         for (Integer taskId : taskIds) {
+            minId = Math.min(minId, taskId);
             try {
                 Task task = new Task(executor, taskId);
-                executor.sendUnanchored(
-                        task, StormCommon.SYSTEM_STREAM_ID, new Values("startup"), executor.getExecutorTransfer());
                 idToTask.put(taskId, task);
             } catch (IOException ex) {
                 throw Utils.wrapInRuntime(ex);
             }
         }
 
-        executor.idToTask = idToTask;
+        executor.idToTaskBase = minId;
+        executor.idToTask = Utils.convertToArray(idToTask, minId);
         return executor;
     }
 
@@ -212,45 +219,69 @@ public abstract class Executor implements Callable, EventHandler<Object> {
         Map<String, SpoutSpec> spouts = topology.get_spouts();
         Map<String, Bolt> bolts = topology.get_bolts();
         if (spouts.containsKey(componentId)) {
-            return StatsUtil.SPOUT;
+            return ClientStatsUtil.SPOUT;
         } else if (bolts.containsKey(componentId)) {
-            return StatsUtil.BOLT;
+            return ClientStatsUtil.BOLT;
         } else {
             throw new RuntimeException("Could not find " + componentId + " in " + topology);
         }
     }
 
     /**
-     * separated from mkExecutor in order to replace executor transfer in executor data for testing
+     * Retrieves all values of all static fields of {@link Config} which represent all available configuration keys through reflection. The
+     * method assumes that they are {@code String}s through reflection.
+     *
+     * @return the list of retrieved field values
+     *
+     * @throws ClassCastException if one of the fields is not of type {@code String}
+     */
+    private static List<String> retrieveAllConfigKeys() {
+        List<String> ret = new ArrayList<>();
+        Field[] fields = Config.class.getFields();
+        for (int i = 0; i < fields.length; i++) {
+            try {
+                String fieldValue = (String) fields[i].get(null);
+                ret.add(fieldValue);
+            } catch (IllegalArgumentException e) {
+                LOG.error(e.getMessage(), e);
+            } catch (IllegalAccessException e) {
+                LOG.error(e.getMessage(), e);
+            }
+        }
+        return ret;
+    }
+
+    public Queue<AddressedTuple> getPendingEmits() {
+        return pendingEmits;
+    }
+
+    /**
+     * separated from mkExecutor in order to replace executor transfer in executor data for testing.
      */
     public ExecutorShutdown execute() throws Exception {
         LOG.info("Loading executor tasks " + componentId + ":" + executorId);
 
-        registerBackpressure();
-        Utils.SmartThread systemThreads =
-                Utils.asyncLoop(executorTransfer, executorTransfer.getName(), reportErrorDie);
-
         String handlerName = componentId + "-executor" + executorId;
-        Utils.SmartThread handlers =
-                Utils.asyncLoop(this, false, reportErrorDie, Thread.NORM_PRIORITY, true, true, handlerName);
-        setupTicks(StatsUtil.SPOUT.equals(type));
+        Utils.SmartThread handler =
+            Utils.asyncLoop(this, false, reportErrorDie, Thread.NORM_PRIORITY, true, true, handlerName);
 
         LOG.info("Finished loading executor " + componentId + ":" + executorId);
-        return new ExecutorShutdown(this, Lists.newArrayList(systemThreads, handlers), idToTask);
+        return new ExecutorShutdown(this, Lists.newArrayList(handler), idToTask, receiveQueue);
     }
 
     public abstract void tupleActionFn(int taskId, TupleImpl tuple) throws Exception;
 
-    @SuppressWarnings("unchecked")
     @Override
-    public void onEvent(Object event, long seq, boolean endOfBatch) throws Exception {
-        ArrayList<AddressedTuple> addressedTuples = (ArrayList<AddressedTuple>) event;
-        for (AddressedTuple addressedTuple : addressedTuples) {
-            TupleImpl tuple = (TupleImpl) addressedTuple.getTuple();
-            int taskId = addressedTuple.getDest();
-            if (isDebug) {
-                LOG.info("Processing received message FOR {} TUPLE: {}", taskId, tuple);
-            }
+    public void accept(Object event) {
+        AddressedTuple addressedTuple = (AddressedTuple) event;
+        int taskId = addressedTuple.getDest();
+
+        TupleImpl tuple = (TupleImpl) addressedTuple.getTuple();
+        if (isDebug) {
+            LOG.info("Processing received TUPLE: {} for TASK: {} ", tuple, taskId);
+        }
+
+        try {
             if (taskId != AddressedTuple.BROADCAST_DEST) {
                 tupleActionFn(taskId, tuple);
             } else {
@@ -258,23 +289,43 @@ public abstract class Executor implements Callable, EventHandler<Object> {
                     tupleActionFn(t, tuple);
                 }
             }
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
     }
 
-    public void metricsTick(Task taskData, TupleImpl tuple) {
+    public void setNeedToRefreshCreds() {
+        this.needToRefreshCreds.set(true);
+    }
+
+    protected void updateExecCredsIfRequired() {
+        if (this.needToRefreshCreds.get()) {
+            this.needToRefreshCreds.set(false);
+            LOG.info("The credentials are being updated {}.", executorId);
+            Credentials creds = this.workerData.getCredentials();
+            idToTask.stream().map(Task::getTaskObject).filter(taskObject -> taskObject instanceof ICredentialsListener)
+                    .forEach(taskObject -> {
+                        ((ICredentialsListener) taskObject).setCredentials(creds == null ? null : creds.get_creds());
+                    });
+        }
+    }
+
+    @Override
+    public void flush() {
+        // NO-OP
+    }
+
+    public void metricsTick(Task task, TupleImpl tuple) {
         try {
             Integer interval = tuple.getInteger(0);
-            int taskId = taskData.getTaskId();
+            int taskId = task.getTaskId();
             Map<Integer, Map<String, IMetric>> taskToMetricToRegistry = intervalToTaskToMetricToRegistry.get(interval);
             Map<String, IMetric> nameToRegistry = null;
             if (taskToMetricToRegistry != null) {
                 nameToRegistry = taskToMetricToRegistry.get(taskId);
             }
+            List<IMetricsConsumer.DataPoint> dataPoints = new ArrayList<>();
             if (nameToRegistry != null) {
-                IMetricsConsumer.TaskInfo taskInfo = new IMetricsConsumer.TaskInfo(
-                        hostname, workerTopologyContext.getThisWorkerPort(),
-                        componentId, taskId, Time.currentTimeSecs(), interval);
-                List<IMetricsConsumer.DataPoint> dataPoints = new ArrayList<>();
                 for (Map.Entry<String, IMetric> entry : nameToRegistry.entrySet()) {
                     IMetric metric = entry.getValue();
                     Object value = metric.getValueAndReset();
@@ -283,114 +334,186 @@ public abstract class Executor implements Callable, EventHandler<Object> {
                         dataPoints.add(dataPoint);
                     }
                 }
-                if (!dataPoints.isEmpty()) {
-                    sendUnanchored(taskData, Constants.METRICS_STREAM_ID,
-                            new Values(taskInfo, dataPoints), executorTransfer);
-                }
+            }
+            addV2Metrics(taskId, dataPoints);
+
+            if (!dataPoints.isEmpty()) {
+                IMetricsConsumer.TaskInfo taskInfo = new IMetricsConsumer.TaskInfo(
+                        hostname, workerTopologyContext.getThisWorkerPort(),
+                        componentId, taskId, Time.currentTimeSecs(), interval);
+                task.sendUnanchored(Constants.METRICS_STREAM_ID,
+                        new Values(taskInfo, dataPoints), executorTransfer, pendingEmits);
+                executorTransfer.flush();
             }
         } catch (Exception e) {
             throw Utils.wrapInRuntime(e);
         }
     }
 
+    // updates v1 metric dataPoints with v2 metric API data
+    private void addV2Metrics(int taskId, List<IMetricsConsumer.DataPoint> dataPoints) {
+        boolean enableV2MetricsDataPoints = ObjectReader.getBoolean(topoConf.get(Config.TOPOLOGY_ENABLE_V2_METRICS_TICK), false);
+        if (!enableV2MetricsDataPoints) {
+            return;
+        }
+        processGauges(taskId, dataPoints);
+        processCounters(taskId, dataPoints);
+        processHistograms(taskId, dataPoints);
+        processMeters(taskId, dataPoints);
+        processTimers(taskId, dataPoints);
+    }
+
+    private void processGauges(int taskId, List<IMetricsConsumer.DataPoint> dataPoints) {
+        Map<String, Gauge> gauges = workerData.getMetricRegistry().getTaskGauges(taskId);
+        for (Map.Entry<String, Gauge> entry : gauges.entrySet()) {
+            Object v = entry.getValue().getValue();
+            if (v instanceof Number) {
+                IMetricsConsumer.DataPoint dataPoint = new IMetricsConsumer.DataPoint(entry.getKey(), v);
+                dataPoints.add(dataPoint);
+            }
+        }
+    }
+
+    private void processCounters(int taskId, List<IMetricsConsumer.DataPoint> dataPoints) {
+        Map<String, Counter> counters = workerData.getMetricRegistry().getTaskCounters(taskId);
+        for (Map.Entry<String, Counter> entry : counters.entrySet()) {
+            Object value = entry.getValue().getCount();
+            IMetricsConsumer.DataPoint dataPoint = new IMetricsConsumer.DataPoint(entry.getKey(), value);
+            dataPoints.add(dataPoint);
+        }
+    }
+
+    private void processHistograms(int taskId, List<IMetricsConsumer.DataPoint> dataPoints) {
+        Map<String, Histogram> histograms = workerData.getMetricRegistry().getTaskHistograms(taskId);
+        for (Map.Entry<String, Histogram> entry : histograms.entrySet()) {
+            Snapshot snapshot =  entry.getValue().getSnapshot();
+            addSnapshotDatapoints(entry.getKey(), snapshot, dataPoints);
+            IMetricsConsumer.DataPoint dataPoint = new IMetricsConsumer.DataPoint(entry.getKey() + ".count", entry.getValue().getCount());
+            dataPoints.add(dataPoint);
+        }
+    }
+
+    private void processMeters(int taskId, List<IMetricsConsumer.DataPoint> dataPoints) {
+        Map<String, Meter> meters = workerData.getMetricRegistry().getTaskMeters(taskId);
+        for (Map.Entry<String, Meter> entry : meters.entrySet()) {
+            IMetricsConsumer.DataPoint dataPoint = new IMetricsConsumer.DataPoint(entry.getKey() + ".count", entry.getValue().getCount());
+            dataPoints.add(dataPoint);
+            addConvertedMetric(entry.getKey(), ".m1_rate", entry.getValue().getOneMinuteRate(), dataPoints);
+            addConvertedMetric(entry.getKey(), ".m5_rate", entry.getValue().getFiveMinuteRate(), dataPoints);
+            addConvertedMetric(entry.getKey(), ".m15_rate", entry.getValue().getFifteenMinuteRate(), dataPoints);
+            addConvertedMetric(entry.getKey(), ".mean_rate", entry.getValue().getMeanRate(), dataPoints);
+        }
+    }
+
+    private void processTimers(int taskId, List<IMetricsConsumer.DataPoint> dataPoints) {
+        Map<String, Timer> timers = workerData.getMetricRegistry().getTaskTimers(taskId);
+        for (Map.Entry<String, Timer> entry : timers.entrySet()) {
+            Snapshot snapshot =  entry.getValue().getSnapshot();
+            addSnapshotDatapoints(entry.getKey(), snapshot, dataPoints);
+            IMetricsConsumer.DataPoint dataPoint = new IMetricsConsumer.DataPoint(entry.getKey() + ".count", entry.getValue().getCount());
+            dataPoints.add(dataPoint);
+        }
+    }
+
+    private void addSnapshotDatapoints(String baseName, Snapshot snapshot, List<IMetricsConsumer.DataPoint> dataPoints) {
+        addConvertedMetric(baseName, ".max", snapshot.getMax(), dataPoints);
+        addConvertedMetric(baseName, ".mean", snapshot.getMean(), dataPoints);
+        addConvertedMetric(baseName, ".min", snapshot.getMin(), dataPoints);
+        addConvertedMetric(baseName, ".stddev", snapshot.getStdDev(), dataPoints);
+        addConvertedMetric(baseName, ".p50", snapshot.getMedian(), dataPoints);
+        addConvertedMetric(baseName, ".p75", snapshot.get75thPercentile(), dataPoints);
+        addConvertedMetric(baseName, ".p95", snapshot.get95thPercentile(), dataPoints);
+        addConvertedMetric(baseName, ".p98", snapshot.get98thPercentile(), dataPoints);
+        addConvertedMetric(baseName, ".p99", snapshot.get99thPercentile(), dataPoints);
+        addConvertedMetric(baseName, ".p999", snapshot.get999thPercentile(), dataPoints);
+    }
+
+    private void addConvertedMetric(String baseName, String suffix, double value, List<IMetricsConsumer.DataPoint> dataPoints) {
+        IMetricsConsumer.DataPoint dataPoint = new IMetricsConsumer.DataPoint(baseName + suffix, convertDuration(value));
+        dataPoints.add(dataPoint);
+    }
+
+    // converts timed codahale metric values from nanosecond to millisecond time scale
+    private double convertDuration(double duration) {
+        return duration * msDurationFactor;
+    }
+
     protected void setupMetrics() {
         for (final Integer interval : intervalToTaskToMetricToRegistry.keySet()) {
             StormTimer timerTask = workerData.getUserTimer();
-            timerTask.scheduleRecurring(interval, interval, new Runnable() {
-                @Override
-                public void run() {
-                    TupleImpl tuple = new TupleImpl(workerTopologyContext, new Values(interval),
-                            (int) Constants.SYSTEM_TASK_ID, Constants.METRICS_TICK_STREAM_ID);
-                    List<AddressedTuple> metricsTickTuple =
-                            Lists.newArrayList(new AddressedTuple(AddressedTuple.BROADCAST_DEST, tuple));
-                    receiveQueue.publish(metricsTickTuple);
+            timerTask.scheduleRecurring(interval, interval,
+                () -> {
+                    TupleImpl tuple =
+                        new TupleImpl(workerTopologyContext, new Values(interval), Constants.SYSTEM_COMPONENT_ID,
+                                      (int) Constants.SYSTEM_TASK_ID, Constants.METRICS_TICK_STREAM_ID);
+                    AddressedTuple metricsTickTuple = new AddressedTuple(AddressedTuple.BROADCAST_DEST, tuple);
+                    try {
+                        receiveQueue.publish(metricsTickTuple);
+                        receiveQueue.flush();  // avoid buffering
+                    } catch (InterruptedException e) {
+                        LOG.warn("Thread interrupted when publishing metrics. Setting interrupt flag.");
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
                 }
-            });
+            );
         }
-    }
-
-    public void sendUnanchored(Task task, String stream, List<Object> values, ExecutorTransfer transfer) {
-        Tuple tuple = task.getTuple(stream, values);
-        List<Integer> tasks = task.getOutgoingTasks(stream, values);
-        for (Integer t : tasks) {
-            transfer.transfer(t, tuple);
-        }
-    }
-
-    /**
-     * Send sampled data to the eventlogger if the global or component level debug flag is set (via nimbus api).
-     */
-    public void sendToEventLogger(Executor executor, Task taskData, List values,
-                                  String componentId, Object messageId, Random random) {
-        Map<String, DebugOptions> componentDebug = executor.getStormComponentDebug().get();
-        DebugOptions debugOptions = componentDebug.get(componentId);
-        if (debugOptions == null) {
-            debugOptions = componentDebug.get(executor.getStormId());
-        }
-        double spct = ((debugOptions != null) && (debugOptions.is_enable())) ? debugOptions.get_samplingpct() : 0;
-        if (spct > 0 && (random.nextDouble() * 100) < spct) {
-            sendUnanchored(taskData, StormCommon.EVENTLOGGER_STREAM_ID,
-                    new Values(componentId, messageId, System.currentTimeMillis(), values),
-                    executor.getExecutorTransfer());
-        }
-    }
-
-    private void registerBackpressure() {
-        receiveQueue.registerBackpressureCallback(new DisruptorBackpressureCallback() {
-            @Override
-            public void highWaterMark() throws Exception {
-                LOG.debug("executor " + executorId + " is congested, set backpressure flag true");
-                WorkerBackpressureThread.notifyBackpressureChecker(workerData.getBackpressureTrigger());
-            }
-
-            @Override
-            public void lowWaterMark() throws Exception {
-                LOG.debug("executor " + executorId + " is not-congested, set backpressure flag false");
-                WorkerBackpressureThread.notifyBackpressureChecker(workerData.getBackpressureTrigger());
-            }
-        });
-        receiveQueue.setHighWaterMark(ObjectReader.getDouble(topoConf.get(Config.BACKPRESSURE_DISRUPTOR_HIGH_WATERMARK)));
-        receiveQueue.setLowWaterMark(ObjectReader.getDouble(topoConf.get(Config.BACKPRESSURE_DISRUPTOR_LOW_WATERMARK)));
-        receiveQueue.setEnableBackpressure(ObjectReader.getBoolean(topoConf.get(Config.TOPOLOGY_BACKPRESSURE_ENABLE), false));
     }
 
     protected void setupTicks(boolean isSpout) {
         final Integer tickTimeSecs = ObjectReader.getInt(topoConf.get(Config.TOPOLOGY_TICK_TUPLE_FREQ_SECS), null);
-        boolean enableMessageTimeout = (Boolean) topoConf.get(Config.TOPOLOGY_ENABLE_MESSAGE_TIMEOUTS);
         if (tickTimeSecs != null) {
-            if (Utils.isSystemId(componentId) || (!enableMessageTimeout && isSpout)) {
-                LOG.info("Timeouts disabled for executor " + componentId + ":" + executorId);
+            boolean enableMessageTimeout = (Boolean) topoConf.get(Config.TOPOLOGY_ENABLE_MESSAGE_TIMEOUTS);
+            boolean isAcker = Acker.ACKER_COMPONENT_ID.equals(componentId);
+            if ((!isAcker && Utils.isSystemId(componentId))
+                || (!enableMessageTimeout && isSpout)
+                || (!enableMessageTimeout && isAcker)) {
+                LOG.info("Timeouts disabled for executor {}:{}", componentId, executorId);
             } else {
                 StormTimer timerTask = workerData.getUserTimer();
-                timerTask.scheduleRecurring(tickTimeSecs, tickTimeSecs, new Runnable() {
-                    @Override
-                    public void run() {
+                timerTask.scheduleRecurring(tickTimeSecs, tickTimeSecs,
+                    () -> {
                         TupleImpl tuple = new TupleImpl(workerTopologyContext, new Values(tickTimeSecs),
-                                (int) Constants.SYSTEM_TASK_ID, Constants.SYSTEM_TICK_STREAM_ID);
-                        List<AddressedTuple> tickTuple =
-                                Lists.newArrayList(new AddressedTuple(AddressedTuple.BROADCAST_DEST, tuple));
-                        receiveQueue.publish(tickTuple);
+                                                        Constants.SYSTEM_COMPONENT_ID,
+                                                        (int) Constants.SYSTEM_TASK_ID,
+                                                        Constants.SYSTEM_TICK_STREAM_ID);
+                        AddressedTuple tickTuple = new AddressedTuple(AddressedTuple.BROADCAST_DEST, tuple);
+                        try {
+                            receiveQueue.publish(tickTuple);
+                            receiveQueue.flush(); // avoid buffering
+                        } catch (InterruptedException e) {
+                            LOG.warn("Thread interrupted when emitting tick tuple. Setting interrupt flag.");
+                            Thread.currentThread().interrupt();
+                            return;
+                        }
                     }
-                });
+                );
             }
         }
     }
 
+    public void reflectNewLoadMapping(LoadMapping loadMapping) {
+        for (LoadAwareCustomStreamGrouping g : groupers) {
+            g.refreshLoad(loadMapping);
+        }
+    }
 
-    private DisruptorQueue mkExecutorBatchQueue(Map<String, Object> topoConf, List<Long> executorId) {
-        int sendSize = ObjectReader.getInt(topoConf.get(Config.TOPOLOGY_EXECUTOR_SEND_BUFFER_SIZE));
-        int waitTimeOutMs = ObjectReader.getInt(topoConf.get(Config.TOPOLOGY_DISRUPTOR_WAIT_TIMEOUT_MILLIS));
-        int batchSize = ObjectReader.getInt(topoConf.get(Config.TOPOLOGY_DISRUPTOR_BATCH_SIZE));
-        int batchTimeOutMs = ObjectReader.getInt(topoConf.get(Config.TOPOLOGY_DISRUPTOR_BATCH_TIMEOUT_MILLIS));
-        return new DisruptorQueue("executor" + executorId + "-send-queue", ProducerType.SINGLE,
-                sendSize, waitTimeOutMs, batchSize, batchTimeOutMs);
+    // Called by flush-tuple-timer thread
+    public boolean publishFlushTuple() {
+        if (receiveQueue.tryPublishDirect(flushTuple)) {
+            LOG.debug("Published Flush tuple to: {} ", getComponentId());
+            return true;
+        } else {
+            LOG.debug("RecvQ is currently full, will retry publishing Flush Tuple later to : {}", getComponentId());
+            return false;
+        }
     }
 
     /**
-     * Returns map of stream id to component id to grouper
+     * Returns map of stream id to component id to grouper.
      */
     private Map<String, Map<String, LoadAwareCustomStreamGrouping>> outboundComponents(
-            WorkerTopologyContext workerTopologyContext, String componentId, Map<String, Object> topoConf) {
+        WorkerTopologyContext workerTopologyContext, String componentId, Map<String, Object> topoConf) {
         Map<String, Map<String, LoadAwareCustomStreamGrouping>> ret = new HashMap<>();
 
         Map<String, Map<String, Grouping>> outputGroupings = workerTopologyContext.getTargets(componentId);
@@ -404,7 +527,7 @@ public abstract class Executor implements Callable, EventHandler<Object> {
                 Grouping grouping = cg.getValue();
                 List<Integer> outTasks = workerTopologyContext.getComponentTasks(component);
                 LoadAwareCustomStreamGrouping grouper = GrouperFactory.mkGrouper(
-                        workerTopologyContext, componentId, streamId, outFields, grouping, outTasks, topoConf);
+                    workerTopologyContext, componentId, streamId, outFields, grouping, outTasks, topoConf);
                 componentGrouper.put(component, grouper);
             }
             if (componentGrouper.size() > 0) {
@@ -421,8 +544,13 @@ public abstract class Executor implements Callable, EventHandler<Object> {
         return ret;
     }
 
-    private Map normalizedComponentConf(Map<String, Object> topoConf, WorkerTopologyContext topologyContext, String componentId) {
-        List<Object> keysToRemove = All_CONFIGS();
+    // =============================================================================
+    // ============================ getter methods =================================
+    // =============================================================================
+
+    private Map<String, Object> normalizedComponentConf(
+        Map<String, Object> topoConf, WorkerTopologyContext topologyContext, String componentId) {
+        List<String> keysToRemove = retrieveAllConfigKeys();
         keysToRemove.remove(Config.TOPOLOGY_DEBUG);
         keysToRemove.remove(Config.TOPOLOGY_MAX_SPOUT_PENDING);
         keysToRemove.remove(Config.TOPOLOGY_MAX_TASK_PARALLELISM);
@@ -440,11 +568,11 @@ public abstract class Executor implements Callable, EventHandler<Object> {
         keysToRemove.remove(Config.TOPOLOGY_STATE_PROVIDER_CONFIG);
         keysToRemove.remove(Config.TOPOLOGY_BOLTS_LATE_TUPLE_STREAM);
 
-        Map<Object, Object> componentConf;
+        Map<String, Object> componentConf;
         String specJsonConf = topologyContext.getComponentCommon(componentId).get_json_conf();
         if (specJsonConf != null) {
             try {
-                componentConf = (Map<Object, Object>) JSONValue.parseWithException(specJsonConf);
+                componentConf = (Map<String, Object>) JSONValue.parseWithException(specJsonConf);
             } catch (ParseException e) {
                 throw new RuntimeException(e);
             }
@@ -455,16 +583,12 @@ public abstract class Executor implements Callable, EventHandler<Object> {
             componentConf = new HashMap<>();
         }
 
-        Map<Object, Object> ret = new HashMap<>();
+        Map<String, Object> ret = new HashMap<>();
         ret.putAll(topoConf);
         ret.putAll(componentConf);
 
         return ret;
     }
-
-    // =============================================================================
-    // ============================ getter methods =================================
-    // =============================================================================
 
     public List<Long> getExecutorId() {
         return executorId;
@@ -482,7 +606,7 @@ public abstract class Executor implements Callable, EventHandler<Object> {
         return openOrPrepareWasCalled;
     }
 
-    public Map getStormConf() {
+    public Map<String, Object> getTopoConf() {
         return topoConf;
     }
 
@@ -490,13 +614,7 @@ public abstract class Executor implements Callable, EventHandler<Object> {
         return stormId;
     }
 
-    public CommonStats getStats() {
-        return stats;
-    }
-
-    public AtomicBoolean getThrottleOn() {
-        return throttleOn;
-    }
+    public abstract CommonStats getStats();
 
     public String getType() {
         return type;
@@ -514,28 +632,24 @@ public abstract class Executor implements Callable, EventHandler<Object> {
         return reportError;
     }
 
+    public ErrorReportingMetrics getErrorReportingMetrics() {
+        return errorReportingMetrics;
+    }
+
     public WorkerTopologyContext getWorkerTopologyContext() {
         return workerTopologyContext;
     }
 
-    public Callable<Boolean> getSampler() {
-        return sampler;
+    public boolean samplerCheck() {
+        return sampler.getAsBoolean();
     }
 
     public AtomicReference<Map<String, DebugOptions>> getStormComponentDebug() {
         return stormComponentDebug;
     }
 
-    public DisruptorQueue getReceiveQueue() {
+    public JCQueue getReceiveQueue() {
         return receiveQueue;
-    }
-
-    public boolean getBackpressure() {
-        return receiveQueue.getThrottleOn();
-    }
-
-    public DisruptorQueue getTransferWorkerQueue() {
-        return transferQueue;
     }
 
     public IStormClusterState getStormClusterState() {
@@ -561,23 +675,5 @@ public abstract class Executor implements Callable, EventHandler<Object> {
     @VisibleForTesting
     public void setLocalExecutorTransfer(ExecutorTransfer executorTransfer) {
         this.executorTransfer = executorTransfer;
-    }
-
-    private static List<Object> All_CONFIGS() {
-        List<Object> ret = new ArrayList<Object>();
-        Config config = new Config();
-        Class<?> ConfigClass = config.getClass();
-        Field[] fields = ConfigClass.getFields();
-        for (int i = 0; i < fields.length; i++) {
-            try {
-                Object obj = fields[i].get(null);
-                ret.add(obj);
-            } catch (IllegalArgumentException e) {
-                LOG.error(e.getMessage(), e);
-            } catch (IllegalAccessException e) {
-                LOG.error(e.getMessage(), e);
-            }
-        }
-        return ret;
     }
 }
